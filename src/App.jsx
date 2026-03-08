@@ -518,18 +518,25 @@ export default function App() {
     setQuizzes(updatedQuizzes);
   };
 
-  const generateAIQuiz = async (planIdx) => {
+  const generateAIQuiz = async (planIdx, isRegenerate = false) => {
     setGeneratingQuiz(true);
     try {
       const plan = allPlans[planIdx];
       const planMaterials = materials.filter(m => m.planIdx === planIdx);
+      
+      // 기존 퀴즈 질문들 (중복 방지용)
+      const existingQuestions = quizzes
+        .filter(q => q.planIdx === planIdx)
+        .map(q => q.question)
+        .join("\n");
       
       const res = await fetch("/api/generate-quiz", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           planTitle: plan?.title || "일반 학습",
-          materials: planMaterials.map(m => `- ${m.title} (${m.type}): ${m.notes || "메모 없음"}`).join("\n") || "등록된 자료 없음"
+          materials: planMaterials.map(m => `- ${m.title} (${m.type}): ${m.notes || "메모 없음"}`).join("\n") || "등록된 자료 없음",
+          existingQuestions: isRegenerate ? existingQuestions : ""
         })
       });
       
@@ -548,6 +555,7 @@ export default function App() {
         question: q.question,
         options: q.options,
         answer: q.answer,
+        source: q.source || "AI생성",
         planIdx: planIdx,
         tags: ["AI생성"],
         createdAt: today()
@@ -1649,11 +1657,52 @@ export default function App() {
                     
                     return (
                       <>
-                        {/* Start Quiz Button */}
-                        <button onClick={() => startQuiz(filteredQuizzes.map(q => q.id))}
-                          style={{ width:"100%", padding:"16px", borderRadius:14, border:"none", background:"#22C97A", color:"white", fontWeight:700, fontSize:14, cursor:"pointer", marginBottom:20 }}>
-                          🎯 {selectedPlanFilter >= 0 ? `"${allPlans[selectedPlanFilter]?.title}" ` : ""}퀴즈 풀기 ({filteredQuizzes.length}문제)
-                        </button>
+                        {/* Quiz Action Buttons */}
+                        <div style={{ display:"flex", gap:10, marginBottom:16 }}>
+                          <button onClick={() => startQuiz(filteredQuizzes.map(q => q.id))}
+                            style={{ flex:2, padding:"14px", borderRadius:12, border:"none", background:"#22C97A", color:"white", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                            🎯 퀴즈 풀기 ({filteredQuizzes.length}문제)
+                          </button>
+                          {selectedPlanFilter >= 0 && (
+                            <button 
+                              onClick={() => generateAIQuiz(selectedPlanFilter, true)}
+                              disabled={generatingQuiz}
+                              style={{ 
+                                flex:1, 
+                                padding:"14px", 
+                                borderRadius:12, 
+                                border:"none", 
+                                background: generatingQuiz ? "#333" : "#7C5CFC", 
+                                color:"white", 
+                                fontWeight:700, 
+                                fontSize:12, 
+                                cursor: generatingQuiz ? "not-allowed" : "pointer",
+                                display:"flex",
+                                alignItems:"center",
+                                justifyContent:"center",
+                                gap:6
+                              }}>
+                              {generatingQuiz ? (
+                                <>
+                                  <div style={{ width:14, height:14, border:"2px solid white", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
+                                  생성중
+                                </>
+                              ) : (
+                                "🔄 재생성"
+                              )}
+                            </button>
+                          )}
+                        </div>
+                        
+                        {/* Quiz Info */}
+                        {selectedPlanFilter >= 0 && (
+                          <div style={{ background:"#1A1A30", borderRadius:10, padding:"10px 12px", marginBottom:16, fontSize:11, color:"#888", lineHeight:1.6 }}>
+                            💡 <strong style={{ color:"#A78BFA" }}>재생성</strong>을 누르면 기존 문제와 중복되지 않는 새로운 5문제가 추가돼요.
+                            {materials.filter(m => m.planIdx === selectedPlanFilter).length > 0 
+                              ? " 등록된 참고자료를 기반으로 출제됩니다."
+                              : " 신뢰할 수 있는 공식 자료 기반으로 출제됩니다."}
+                          </div>
+                        )}
                         
                         {/* Quiz List */}
                         {filteredQuizzes.map((q, qi) => {
@@ -1667,7 +1716,10 @@ export default function App() {
                                       📋 {linkedPlan.title}
                                     </div>
                                   )}
-                                  <div style={{ fontSize:13, fontWeight:600, color:"white", marginBottom:8 }}>Q{qi+1}. {q.question}</div>
+                                  <div style={{ fontSize:13, fontWeight:600, color:"white", marginBottom:6 }}>Q{qi+1}. {q.question}</div>
+                                  {q.source && (
+                                    <div style={{ fontSize:9, color:"#667799", marginBottom:6 }}>📚 출처: {q.source}</div>
+                                  )}
                                   <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                                     {q.tags?.map((tag, ti) => (
                                       <span key={ti} style={{ fontSize:9, background:"#2A2A45", color:"#888", padding:"2px 6px", borderRadius:99 }}>#{tag}</span>
@@ -1680,6 +1732,8 @@ export default function App() {
                             </div>
                           );
                         })}
+                        
+                        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                       </>
                     );
                   })()}
@@ -2424,14 +2478,14 @@ export default function App() {
             <div style={{ background:"#16162A", borderRadius:20, padding:"24px", width:"100%", maxWidth:400, border:"1px solid #2A2A45" }}
               onClick={e => e.stopPropagation()}>
               <div style={{ fontSize:18, fontWeight:800, color:"white", marginBottom:8 }}>🤖 AI 퀴즈 생성</div>
-              <div style={{ fontSize:12, color:"#667799", marginBottom:20 }}>플랜과 등록된 참고자료를 바탕으로 퀴즈를 자동 생성해요</div>
+              <div style={{ fontSize:12, color:"#667799", marginBottom:20 }}>플랜과 참고자료를 바탕으로 <strong style={{ color:"#22C97A" }}>5문제</strong>를 자동 생성해요</div>
               
               {generatingQuiz ? (
                 <div style={{ textAlign:"center", padding:"30px 0" }}>
                   <div style={{ width:40, height:40, border:`3px solid ${ACCENT}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
                   <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-                  <div style={{ fontSize:13, color:"#A78BFA" }}>AI가 퀴즈를 생성 중이에요...</div>
-                  <div style={{ fontSize:11, color:"#556", marginTop:4 }}>잠시만 기다려주세요</div>
+                  <div style={{ fontSize:13, color:"#A78BFA" }}>AI가 5문제를 생성 중이에요...</div>
+                  <div style={{ fontSize:11, color:"#556", marginTop:4 }}>잠시만 기다려주세요 (약 10~20초)</div>
                 </div>
               ) : (
                 <>
@@ -2445,7 +2499,7 @@ export default function App() {
                       {allPlans.map((p, i) => {
                         const planMaterials = materials.filter(m => m.planIdx === i);
                         return (
-                          <button key={i} onClick={() => generateAIQuiz(i)}
+                          <button key={i} onClick={() => generateAIQuiz(i, false)}
                             style={{
                               width:"100%",
                               padding:"16px",
@@ -2458,7 +2512,7 @@ export default function App() {
                             }}>
                             <div style={{ fontSize:14, fontWeight:700, marginBottom:4 }}>{p.title}</div>
                             <div style={{ fontSize:11, color:"#667799" }}>
-                              📚 참고자료 {planMaterials.length}개
+                              📚 참고자료 {planMaterials.length}개 {planMaterials.length === 0 && "· 공식자료 기반 출제"}
                             </div>
                           </button>
                         );
