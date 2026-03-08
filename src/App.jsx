@@ -167,6 +167,8 @@ export default function App() {
   const [deleteConfirmPlan, setDeleteConfirmPlan] = useState(null);
   const [form,           setForm]          = useState({ field:"", examDate:"", dailyHours:"1", background:"", notes:"", includeSubtasks:false });
   const [creating,       setCreating]      = useState(false);
+  const [createProgress, setCreateProgress] = useState(0);
+  const [createElapsed,  setCreateElapsed]  = useState(0);
   const [createError,    setCreateError]   = useState("");
   const [activeTab,      setActiveTab]     = useState("plan");
   const [resultModal,    setResultModal]   = useState(null); // plan index for result recording
@@ -202,6 +204,28 @@ export default function App() {
       else setScreen("login");
     })();
   }, []);
+
+  // Progress timer for plan creation
+  useEffect(() => {
+    if (!creating) {
+      setCreateProgress(0);
+      setCreateElapsed(0);
+      return;
+    }
+    
+    const estimatedTime = form.includeSubtasks ? 60 : 20; // seconds
+    const interval = setInterval(() => {
+      setCreateElapsed(prev => {
+        const next = prev + 0.5;
+        // Progress increases faster at start, slower near end
+        const progress = Math.min(95, (next / estimatedTime) * 100);
+        setCreateProgress(progress);
+        return next;
+      });
+    }, 500);
+    
+    return () => clearInterval(interval);
+  }, [creating, form.includeSubtasks]);
 
   const validatePassword = (pw) => {
     if (pw.length < 6)                   return "비밀번호는 6자 이상이어야 해요.";
@@ -2534,10 +2558,57 @@ export default function App() {
         </div>
         
         {createError && <div style={{ fontSize:12, color:"#E05555", marginBottom:12, padding:"10px 14px", background:"#2A1010", borderRadius:10 }}>{createError}</div>}
-        <button onClick={handleCreate} disabled={creating}
-          style={{ width:"100%", padding:"16px 0", borderRadius:14, border:"none", background:creating?"#333":`linear-gradient(135deg,${ACCENT},#A78BFA)`, color:"white", fontWeight:700, fontSize:15, cursor:creating?"not-allowed":"pointer" }}>
-          {creating ? "✨ AI가 스케줄을 생성 중이에요..." : "🚀 AI 스터디 플랜 생성하기"}
-        </button>
+        
+        {creating ? (
+          <div style={{ background:"#16162A", borderRadius:14, padding:"20px", border:"1px solid #2A2A45" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ 
+                  width:20, height:20, 
+                  border:"2px solid #7C5CFC", 
+                  borderTopColor:"transparent", 
+                  borderRadius:"50%", 
+                  animation:"spin 1s linear infinite" 
+                }} />
+                <span style={{ fontSize:13, color:"white", fontWeight:600 }}>AI가 플랜 생성 중...</span>
+              </div>
+              <span style={{ fontSize:12, color:"#A78BFA", fontWeight:700 }}>{Math.round(createProgress)}%</span>
+            </div>
+            
+            {/* Progress bar */}
+            <div style={{ background:"#0E0E1A", borderRadius:99, height:8, overflow:"hidden", marginBottom:12 }}>
+              <div style={{ 
+                background:`linear-gradient(90deg, ${ACCENT}, #A78BFA)`, 
+                height:"100%", 
+                width:`${createProgress}%`, 
+                borderRadius:99,
+                transition:"width 0.3s ease"
+              }} />
+            </div>
+            
+            {/* Time info */}
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#666" }}>
+              <span>⏱️ 경과: {Math.floor(createElapsed)}초</span>
+              <span>예상: {form.includeSubtasks ? "~60초" : "~20초"}</span>
+            </div>
+            
+            {/* Stage messages */}
+            <div style={{ marginTop:12, fontSize:11, color:"#888", textAlign:"center" }}>
+              {createProgress < 20 && "📚 시험 정보 분석 중..."}
+              {createProgress >= 20 && createProgress < 40 && "📅 학습 일정 계획 중..."}
+              {createProgress >= 40 && createProgress < 60 && "📝 과목별 커리큘럼 생성 중..."}
+              {createProgress >= 60 && createProgress < 80 && "🎯 맞춤 학습 내용 배치 중..."}
+              {createProgress >= 80 && "✨ 마무리 중..."}
+            </div>
+            
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        ) : (
+          <button onClick={handleCreate}
+            style={{ width:"100%", padding:"16px 0", borderRadius:14, border:"none", background:`linear-gradient(135deg,${ACCENT},#A78BFA)`, color:"white", fontWeight:700, fontSize:15, cursor:"pointer" }}>
+            🚀 AI 스터디 플랜 생성하기
+          </button>
+        )}
       </div>
       
       {/* Bottom Navigation */}
