@@ -2491,14 +2491,14 @@ export default function App() {
         <div style={{ fontSize:13, color:"#888", marginBottom:24, lineHeight:1.7 }}>아래 정보를 입력하면 Claude AI가 맞춤 공부 스케줄을 자동으로 생성해요.</div>
         {[
           { label:"📖 시험명 / 공부 분야 *", key:"field",      placeholder:"예: 빅데이터분석기사 필기, TOEIC, 정보처리기사", type:"text" },
-          { label:"📅 시험일 *",             key:"examDate",   placeholder:"",                                              type:"date" },
+          { label:"📅 시험일/목표일 *",      key:"examDate",   placeholder:"",                                              type:"date" },
           { label:"🎓 기존 배경지식",         key:"background", placeholder:"예: ADsP 합격, 통계 기초 있음, 완전 비전공자",   type:"text" },
           { label:"📝 추가 메모",             key:"notes",      placeholder:"예: 통계가 약함, 주말엔 2시간 가능",            type:"text" },
         ].map(f => (
           <div key={f.key} style={{ marginBottom:16 }}>
             <div style={{ fontSize:12, fontWeight:600, color:"#AAA", marginBottom:7 }}>{f.label}</div>
             <input type={f.type} value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} placeholder={f.placeholder}
-              style={{ width:"100%", padding:"12px 14px", borderRadius:12, border:"1.5px solid #2A2A45", background:"#16162A", color:"white", fontSize:13, outline:"none", boxSizing:"border-box" }} />
+              style={{ width:"100%", padding:"12px 14px", borderRadius:12, border:"1.5px solid #2A2A45", background:"#16162A", color:"white", fontSize:13, outline:"none", boxSizing:"border-box", colorScheme:"dark" }} />
           </div>
         ))}
         <div style={{ marginBottom:24 }}>
