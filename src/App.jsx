@@ -44,43 +44,25 @@ const hashPassword = async (pw) => {
 };
 
 const generatePlan = async (form) => {
-  const prompt = `당신은 한국의 시험 준비 전문 스터디 플래너입니다.
-아래 정보를 바탕으로 최적의 공부 스케줄을 JSON으로 생성해주세요.
-
-시험/공부 분야: ${form.field}
-시험일: ${form.examDate}
-하루 학습 시간: ${form.dailyHours}시간
-기존 배경지식: ${form.background || "없음"}
-추가 메모: ${form.notes || "없음"}
-오늘 날짜: ${today()}
-
-아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
-{
-  "title": "플랜 제목 (예: 빅데이터분석기사 필기 합격 플랜)",
-  "subjects": [
-    { "key": "s1", "label": "과목명", "color": "#7C5CFC" }
-  ],
-  "schedule": [
-    { "day": 1, "date": "YYYY-MM-DD", "subject": "s1", "topic": "오늘 공부할 내용 (구체적으로)" }
-  ]
-}
-
-규칙:
-- schedule의 date는 오늘(${today()})부터 시험일(${form.examDate}) 하루 전까지 빠짐없이 채우세요
-- 각 날짜마다 하나의 항목만 생성하세요
-- topic은 한국어로 구체적으로 작성하세요
-- subject는 반드시 subjects 배열의 key 중 하나여야 합니다
-- subjects의 color는 #7C5CFC, #22C97A, #F7A34F, #FF6B6B, #38BDF8 등 각각 다른 색상으로 지정하세요`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/generate-plan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 8000, messages: [{ role: "user", content: prompt }] })
+    body: JSON.stringify({
+      field: form.field,
+      examDate: form.examDate,
+      dailyHours: form.dailyHours,
+      background: form.background,
+      notes: form.notes,
+      today: today()
+    })
   });
-  const data = await res.json();
-  const text = data.content.map(c => c.text || "").join("");
-  const clean = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || "플랜 생성 실패");
+  }
+  
+  return await res.json();
 };
 
 // Bottom Navigation Component
@@ -470,39 +452,21 @@ export default function App() {
       const plan = allPlans[planIdx];
       const planMaterials = materials.filter(m => m.planIdx === planIdx);
       
-      const prompt = `당신은 한국의 시험 출제 전문가입니다.
-아래 정보를 바탕으로 5지선다 객관식 퀴즈 3개를 JSON으로 생성해주세요.
-
-시험/분야: ${plan?.title || "일반 학습"}
-참고 자료:
-${planMaterials.map(m => `- ${m.title} (${m.type}): ${m.notes || "메모 없음"}`).join("\n") || "등록된 자료 없음"}
-
-아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
-{
-  "quizzes": [
-    {
-      "question": "문제 내용",
-      "options": ["선택지1", "선택지2", "선택지3", "선택지4", "선택지5"],
-      "answer": 0
-    }
-  ]
-}
-
-규칙:
-- question은 명확하고 구체적인 한국어 문제
-- options는 정확히 5개의 선택지 (정답 포함)
-- answer는 정답의 인덱스 (0-4)
-- 실제 시험에 나올 법한 실용적인 문제 출제`;
-
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/generate-quiz", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+        body: JSON.stringify({
+          planTitle: plan?.title || "일반 학습",
+          materials: planMaterials.map(m => `- ${m.title} (${m.type}): ${m.notes || "메모 없음"}`).join("\n") || "등록된 자료 없음"
+        })
       });
-      const data = await res.json();
-      const text = data.content.map(c => c.text || "").join("");
-      const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "퀴즈 생성 실패");
+      }
+      
+      const parsed = await res.json();
       
       const u = await loadUsers();
       if (!u[nickname]) return;
