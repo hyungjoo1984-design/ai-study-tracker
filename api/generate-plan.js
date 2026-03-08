@@ -33,7 +33,17 @@ export default async function handler(req, res) {
     { "key": "s1", "label": "과목명", "color": "#7C5CFC" }
   ],
   "schedule": [
-    { "day": 1, "date": "YYYY-MM-DD", "subject": "s1", "topic": "오늘 공부할 내용 (구체적으로)" }
+    { 
+      "day": 1, 
+      "date": "YYYY-MM-DD", 
+      "subject": "s1", 
+      "topic": "오늘 공부할 내용 (구체적으로)",
+      "subtasks": [
+        "세부 학습 내용 1",
+        "세부 학습 내용 2",
+        "세부 학습 내용 3"
+      ]
+    }
   ]
 }
 
@@ -42,7 +52,8 @@ export default async function handler(req, res) {
 - 각 날짜마다 하나의 항목만 생성하세요
 - topic은 한국어로 구체적으로 작성하세요
 - subject는 반드시 subjects 배열의 key 중 하나여야 합니다
-- subjects의 color는 #7C5CFC, #22C97A, #F7A34F, #FF6B6B, #38BDF8 등 각각 다른 색상으로 지정하세요`;
+- subjects의 color는 #7C5CFC, #22C97A, #F7A34F, #FF6B6B, #38BDF8 등 각각 다른 색상으로 지정하세요
+- subtasks는 각 날짜별로 2~5개의 구체적인 세부 학습 항목을 배열로 작성하세요`;
 
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {

@@ -153,6 +153,7 @@ export default function App() {
   const [activePlanIdx,  setActivePlanIdx] = useState(0);
   const [logs,           setLogs]          = useState({});
   const [view,           setView]          = useState("schedule");
+  const [expandedDay,    setExpandedDay]   = useState(null); // day number for expanded subtasks
   const [selectedDay,    setSelectedDay]   = useState(null);
   const [hoursInput,     setHoursInput]    = useState("1");
   const [noteInput,      setNoteInput]     = useState("");
@@ -332,6 +333,49 @@ export default function App() {
     if (!u[nickname]?.plans?.[activePlanIdx]) return;
     u[nickname].plans[activePlanIdx].logs = updated;
     await saveUsers(u); setUsers({ ...u }); setDeleteConfirmDay(null);
+  };
+
+  // Subtask functions
+  const toggleSubtask = async (dayNum, subtaskIdx) => {
+    const currentLog = logs[dayNum] || {};
+    const currentSubtasks = currentLog.subtasksDone || [];
+    const newSubtasks = [...currentSubtasks];
+    newSubtasks[subtaskIdx] = !newSubtasks[subtaskIdx];
+    
+    const updated = { 
+      ...logs, 
+      [dayNum]: { 
+        ...currentLog, 
+        subtasksDone: newSubtasks 
+      } 
+    };
+    setLogs(updated);
+    
+    const u = await loadUsers();
+    if (!u[nickname]?.plans?.[activePlanIdx]) return;
+    u[nickname].plans[activePlanIdx].logs = updated;
+    await saveUsers(u); 
+    setUsers({ ...u });
+  };
+
+  const toggleAllSubtasks = async (dayNum, subtasksLength, allChecked) => {
+    const currentLog = logs[dayNum] || {};
+    const newSubtasks = Array(subtasksLength).fill(!allChecked);
+    
+    const updated = { 
+      ...logs, 
+      [dayNum]: { 
+        ...currentLog, 
+        subtasksDone: newSubtasks 
+      } 
+    };
+    setLogs(updated);
+    
+    const u = await loadUsers();
+    if (!u[nickname]?.plans?.[activePlanIdx]) return;
+    u[nickname].plans[activePlanIdx].logs = updated;
+    await saveUsers(u); 
+    setUsers({ ...u });
   };
 
   const openResultModal = (planIdx) => {
@@ -2401,21 +2445,171 @@ export default function App() {
               {days.map(day => {
                 const subj=subjects.find(s=>s.key===day.subject), done=logs[day.day]?.done;
                 const isPast=day.date<today(), isToday=day.date===today();
+                const isExpanded = expandedDay === day.day;
+                const subtasks = day.subtasks || [];
+                const subtasksDone = logs[day.day]?.subtasksDone || [];
+                const completedSubtasks = subtasksDone.filter(Boolean).length;
+                const allSubtasksChecked = subtasks.length > 0 && completedSubtasks === subtasks.length;
+                
                 return (
-                  <div key={day.day} onClick={() => !done && openLog(day)}
-                    style={{ display:"flex", gap:12, alignItems:"flex-start", padding:"12px 14px", marginBottom:6, background:done?"white":isToday?"#EEF2FF":"white", borderRadius:12, border:`1.5px solid ${done?"#22C97A22":isToday?`${ACCENT}44`:"#E8ECF2"}`, cursor:done?"default":"pointer", opacity:isPast&&!done?0.5:1 }}>
-                    <div style={{ marginTop:2, width:18, height:18, borderRadius:"50%", background:done?"#22C97A":"#E8ECF2", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                      {done && <span style={{ fontSize:10 }}>✓</span>}
-                    </div>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:3 }}>
-                        <span style={{ fontSize:9, fontWeight:700, color:subj?.color||"#999", background:`${subj?.color||"#999"}18`, padding:"2px 7px", borderRadius:99 }}>{subj?.label||""}</span>
-                        {isToday && <span style={{ fontSize:9, background:`${ACCENT}22`, color:ACCENT, borderRadius:99, padding:"2px 6px", fontWeight:700 }}>오늘</span>}
+                  <div key={day.day} style={{ marginBottom:6 }}>
+                    {/* Main topic row */}
+                    <div 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (subtasks.length > 0) {
+                          setExpandedDay(isExpanded ? null : day.day);
+                        } else if (!done) {
+                          openLog(day);
+                        }
+                      }}
+                      style={{ 
+                        display:"flex", 
+                        gap:12, 
+                        alignItems:"flex-start", 
+                        padding:"12px 14px", 
+                        background:done?"white":isToday?"#EEF2FF":"white", 
+                        borderRadius: isExpanded ? "12px 12px 0 0" : 12, 
+                        border:`1.5px solid ${done?"#22C97A22":isToday?`${ACCENT}44`:"#E8ECF2"}`,
+                        borderBottom: isExpanded ? "none" : undefined,
+                        cursor:"pointer", 
+                        opacity:isPast&&!done?0.5:1 
+                      }}>
+                      <div style={{ marginTop:2, width:18, height:18, borderRadius:"50%", background:done?"#22C97A":"#E8ECF2", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                        {done && <span style={{ fontSize:10 }}>✓</span>}
                       </div>
-                      <div style={{ fontSize:13, fontWeight:600, color:"#1A1A2E", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{day.topic}</div>
-                      <div style={{ fontSize:10, color:"#AAA", marginTop:2 }}>{fmt(day.date)} · Day {day.day}</div>
-                      {done && logs[day.day]?.hours && <div style={{ fontSize:10, color:"#22C97A", marginTop:2 }}>⏱ {logs[day.day].hours}h 완료</div>}
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:3 }}>
+                          <span style={{ fontSize:9, fontWeight:700, color:subj?.color||"#999", background:`${subj?.color||"#999"}18`, padding:"2px 7px", borderRadius:99 }}>{subj?.label||""}</span>
+                          {isToday && <span style={{ fontSize:9, background:`${ACCENT}22`, color:ACCENT, borderRadius:99, padding:"2px 6px", fontWeight:700 }}>오늘</span>}
+                          {subtasks.length > 0 && (
+                            <span style={{ fontSize:9, background:"#F0F0F5", color:"#666", borderRadius:99, padding:"2px 6px", fontWeight:600 }}>
+                              {completedSubtasks}/{subtasks.length}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize:13, fontWeight:600, color:"#1A1A2E", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{day.topic}</div>
+                        <div style={{ fontSize:10, color:"#AAA", marginTop:2 }}>{fmt(day.date)} · Day {day.day}</div>
+                        {done && logs[day.day]?.hours && <div style={{ fontSize:10, color:"#22C97A", marginTop:2 }}>⏱ {logs[day.day].hours}h 완료</div>}
+                      </div>
+                      {subtasks.length > 0 && (
+                        <div style={{ flexShrink:0, color:"#AAA", fontSize:12, transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}>
+                          ▼
+                        </div>
+                      )}
                     </div>
+                    
+                    {/* Subtasks dropdown */}
+                    {isExpanded && subtasks.length > 0 && (
+                      <div style={{ 
+                        background:"#F8F9FC", 
+                        borderRadius:"0 0 12px 12px", 
+                        border:`1.5px solid ${isToday?`${ACCENT}44`:"#E8ECF2"}`,
+                        borderTop:"none",
+                        padding:"12px 14px",
+                        marginTop:"-1px"
+                      }}>
+                        {/* Toggle all button */}
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleAllSubtasks(day.day, subtasks.length, allSubtasksChecked);
+                          }}
+                          style={{ 
+                            display:"flex", 
+                            alignItems:"center", 
+                            gap:8, 
+                            marginBottom:10, 
+                            paddingBottom:10, 
+                            borderBottom:"1px dashed #E0E0E5",
+                            cursor:"pointer"
+                          }}>
+                          <div style={{ 
+                            width:16, 
+                            height:16, 
+                            borderRadius:4, 
+                            background: allSubtasksChecked ? ACCENT : "white",
+                            border: allSubtasksChecked ? `1.5px solid ${ACCENT}` : "1.5px solid #CCC",
+                            display:"flex", 
+                            alignItems:"center", 
+                            justifyContent:"center",
+                            flexShrink:0
+                          }}>
+                            {allSubtasksChecked && <span style={{ fontSize:10, color:"white" }}>✓</span>}
+                          </div>
+                          <span style={{ fontSize:11, color:"#666", fontWeight:600 }}>
+                            {allSubtasksChecked ? "모두 해제" : "모두 체크"}
+                          </span>
+                        </div>
+                        
+                        {/* Subtask items */}
+                        {subtasks.map((subtask, idx) => {
+                          const isChecked = subtasksDone[idx] || false;
+                          return (
+                            <div 
+                              key={idx}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSubtask(day.day, idx);
+                              }}
+                              style={{ 
+                                display:"flex", 
+                                alignItems:"flex-start", 
+                                gap:10, 
+                                padding:"8px 0",
+                                cursor:"pointer",
+                                borderBottom: idx < subtasks.length - 1 ? "1px solid #EAEAEF" : "none"
+                              }}>
+                              <div style={{ 
+                                width:18, 
+                                height:18, 
+                                borderRadius:4, 
+                                background: isChecked ? "#22C97A" : "white",
+                                border: isChecked ? "1.5px solid #22C97A" : "1.5px solid #CCC",
+                                display:"flex", 
+                                alignItems:"center", 
+                                justifyContent:"center",
+                                flexShrink:0,
+                                marginTop:1
+                              }}>
+                                {isChecked && <span style={{ fontSize:10, color:"white" }}>✓</span>}
+                              </div>
+                              <span style={{ 
+                                fontSize:12, 
+                                color: isChecked ? "#999" : "#333",
+                                textDecoration: isChecked ? "line-through" : "none",
+                                lineHeight:1.4
+                              }}>
+                                {subtask}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        
+                        {/* Complete day button */}
+                        {!done && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openLog(day);
+                            }}
+                            style={{
+                              width:"100%",
+                              marginTop:12,
+                              padding:"10px",
+                              borderRadius:8,
+                              border:"none",
+                              background: allSubtasksChecked ? "#22C97A" : ACCENT,
+                              color:"white",
+                              fontSize:12,
+                              fontWeight:600,
+                              cursor:"pointer"
+                            }}>
+                            ✅ 오늘 학습 완료하기
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
