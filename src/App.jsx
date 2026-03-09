@@ -181,13 +181,13 @@ export default function App() {
   const [materials,      setMaterials]     = useState([]); // { id, title, type, url, planIdx, tags, notes, createdAt }
   const [materialModal,  setMaterialModal] = useState(null); // null or material object for editing
   const [materialForm,   setMaterialForm]  = useState({ title:"", type:"book", url:"", planIdx:-1, tags:"", notes:"", fileData:"", fileName:"", fileType:"" });
-  const [quizzes,        setQuizzes]       = useState([]); // { id, question, options, answer, planIdx, tags, createdAt }
-  const [wrongAnswers,   setWrongAnswers]  = useState([]); // { quizId, answeredAt, selectedAnswer }
-  const [quizModal,      setQuizModal]     = useState(null); // null or "add" or "generate"
-  const [quizForm,       setQuizForm]      = useState({ question:"", options:["","","","",""], answer:0, planIdx:-1, tags:"" });
-  const [quizMode,       setQuizMode]      = useState(null); // null or { quizIds, currentIdx, answers }
+  const [quizSets,       setQuizSets]      = useState([]); // { id, planIdx, quizzes: [...], createdAt, results: { completed, correct, answers } }
+  const [wrongAnswers,   setWrongAnswers]  = useState([]); // { setId, quizIdx, answeredAt, selectedAnswer }
+  const [quizModal,      setQuizModal]     = useState(null); // null or "generate"
+  const [quizMode,       setQuizMode]      = useState(null); // null or { setId, currentIdx, answers }
   const [generatingQuiz, setGeneratingQuiz]= useState(false);
   const [selectedPlanFilter, setSelectedPlanFilter] = useState(-1); // -1 = all, index = specific plan
+  const [expandedSetId,  setExpandedSetId] = useState(null); // for accordion
 
   useEffect(() => {
     (async () => {
@@ -197,7 +197,7 @@ export default function App() {
       if (sess && u[sess]) { 
         setNickname(sess); 
         setMaterials(u[sess].materials || []);
-        setQuizzes(u[sess].quizzes || []);
+        setQuizSets(u[sess].quizSets || []);
         setWrongAnswers(u[sess].wrongAnswers || []);
         setScreen("dashboard"); 
       }
@@ -253,10 +253,10 @@ export default function App() {
     const nick = nickInput.trim();
     const hash = await hashPassword(pwInput);
     const u = await loadUsers();
-    u[nick] = { passwordHash: hash, plans: [], materials: [], quizzes: [], wrongAnswers: [] };
+    u[nick] = { passwordHash: hash, plans: [], materials: [], quizSets: [], wrongAnswers: [] };
     await saveUsers(u); setUsers(u);
     await saveSession(nick); setNickname(nick);
-    setMaterials([]); setQuizzes([]); setWrongAnswers([]);
+    setMaterials([]); setQuizSets([]); setWrongAnswers([]);
     setActiveTab("plan");
     setScreen("dashboard");
   };
@@ -270,7 +270,7 @@ export default function App() {
     setNickError(""); setUsers(u);
     await saveSession(nick); setNickname(nick);
     setMaterials(u[nick].materials || []);
-    setQuizzes(u[nick].quizzes || []);
+    setQuizSets(u[nick].quizSets || []);
     setWrongAnswers(u[nick].wrongAnswers || []);
     setActiveTab("plan");
     setScreen("dashboard");
@@ -441,7 +441,7 @@ export default function App() {
     const u = await loadUsers();
     if (u[nickname]) {
       setMaterials(u[nickname].materials || []);
-      setQuizzes(u[nickname].quizzes || []);
+      setQuizSets(u[nickname].quizSets || []);
       setWrongAnswers(u[nickname].wrongAnswers || []);
     }
   };
@@ -487,47 +487,25 @@ export default function App() {
     setMaterials(updatedMaterials);
   };
 
-  const saveQuiz = async () => {
+  const deleteQuizSet = async (setId) => {
     const u = await loadUsers();
     if (!u[nickname]) return;
-    
-    const newQuiz = {
-      id: Date.now(),
-      question: quizForm.question,
-      options: quizForm.options,
-      answer: quizForm.answer,
-      planIdx: quizForm.planIdx,
-      tags: quizForm.tags.split(",").map(t => t.trim()).filter(Boolean),
-      createdAt: today()
-    };
-    
-    const updatedQuizzes = [newQuiz, ...quizzes];
-    u[nickname].quizzes = updatedQuizzes;
+    const updatedSets = quizSets.filter(s => s.id !== setId);
+    u[nickname].quizSets = updatedSets;
     await saveUsers(u);
-    setQuizzes(updatedQuizzes);
-    setQuizModal(null);
-    setQuizForm({ question:"", options:["","","","",""], answer:0, planIdx:-1, tags:"" });
+    setQuizSets(updatedSets);
   };
 
-  const deleteQuiz = async (id) => {
-    const u = await loadUsers();
-    if (!u[nickname]) return;
-    const updatedQuizzes = quizzes.filter(q => q.id !== id);
-    u[nickname].quizzes = updatedQuizzes;
-    await saveUsers(u);
-    setQuizzes(updatedQuizzes);
-  };
-
-  const generateAIQuiz = async (planIdx, isRegenerate = false) => {
+  const generateAIQuiz = async (planIdx) => {
     setGeneratingQuiz(true);
     try {
       const plan = allPlans[planIdx];
       const planMaterials = materials.filter(m => m.planIdx === planIdx);
       
       // 기존 퀴즈 질문들 (중복 방지용)
-      const existingQuestions = quizzes
-        .filter(q => q.planIdx === planIdx)
-        .map(q => q.question)
+      const existingQuestions = quizSets
+        .filter(s => s.planIdx === planIdx)
+        .flatMap(s => s.quizzes.map(q => q.question))
         .join("\n");
       
       const res = await fetch("/api/generate-quiz", {
@@ -536,7 +514,7 @@ export default function App() {
         body: JSON.stringify({
           planTitle: plan?.title || "일반 학습",
           materials: planMaterials.map(m => `- ${m.title} (${m.type}): ${m.notes || "메모 없음"}`).join("\n") || "등록된 자료 없음",
-          existingQuestions: isRegenerate ? existingQuestions : ""
+          existingQuestions: existingQuestions
         })
       });
       
@@ -550,21 +528,24 @@ export default function App() {
       const u = await loadUsers();
       if (!u[nickname]) return;
       
-      const newQuizzes = parsed.quizzes.map((q, i) => ({
-        id: Date.now() + i,
-        question: q.question,
-        options: q.options,
-        answer: q.answer,
-        source: q.source || "AI생성",
+      // 새 퀴즈 세트 생성
+      const newSet = {
+        id: Date.now(),
         planIdx: planIdx,
-        tags: ["AI생성"],
-        createdAt: today()
-      }));
+        quizzes: parsed.quizzes.map((q, i) => ({
+          question: q.question,
+          options: q.options,
+          answer: q.answer,
+          source: q.source || "AI생성"
+        })),
+        createdAt: today(),
+        results: null // { completed: true, correct: 7, answers: [...] }
+      };
       
-      const updatedQuizzes = [...newQuizzes, ...quizzes];
-      u[nickname].quizzes = updatedQuizzes;
+      const updatedSets = [newSet, ...quizSets];
+      u[nickname].quizSets = updatedSets;
       await saveUsers(u);
-      setQuizzes(updatedQuizzes);
+      setQuizSets(updatedSets);
       setQuizModal(null);
     } catch (e) {
       console.error("Quiz generation failed:", e);
@@ -574,24 +555,27 @@ export default function App() {
     }
   };
 
-  const startQuiz = (quizIds) => {
-    if (quizIds.length === 0) return;
-    setQuizMode({ quizIds, currentIdx: 0, answers: {}, showResult: false });
+  const startQuizSet = (setId) => {
+    const set = quizSets.find(s => s.id === setId);
+    if (!set) return;
+    setQuizMode({ setId, currentIdx: 0, answers: [], showResult: false });
   };
 
   const answerQuiz = async (selectedIdx) => {
     if (!quizMode) return;
-    const currentQuizId = quizMode.quizIds[quizMode.currentIdx];
-    const currentQuiz = quizzes.find(q => q.id === currentQuizId);
+    const set = quizSets.find(s => s.id === quizMode.setId);
+    if (!set) return;
+    
+    const currentQuiz = set.quizzes[quizMode.currentIdx];
     const isCorrect = selectedIdx === currentQuiz.answer;
     
-    const newAnswers = { ...quizMode.answers, [currentQuizId]: { selected: selectedIdx, correct: isCorrect } };
+    const newAnswers = [...quizMode.answers, { selected: selectedIdx, correct: isCorrect }];
     
-    // Save wrong answer
+    // 오답 저장
     if (!isCorrect) {
       const u = await loadUsers();
       if (u[nickname]) {
-        const newWrong = { quizId: currentQuizId, answeredAt: today(), selectedAnswer: selectedIdx };
+        const newWrong = { setId: quizMode.setId, quizIdx: quizMode.currentIdx, answeredAt: today(), selectedAnswer: selectedIdx };
         const updatedWrong = [newWrong, ...(u[nickname].wrongAnswers || [])];
         u[nickname].wrongAnswers = updatedWrong;
         await saveUsers(u);
@@ -599,17 +583,30 @@ export default function App() {
       }
     }
     
-    if (quizMode.currentIdx < quizMode.quizIds.length - 1) {
+    if (quizMode.currentIdx < set.quizzes.length - 1) {
       setQuizMode({ ...quizMode, currentIdx: quizMode.currentIdx + 1, answers: newAnswers });
     } else {
+      // 퀴즈 완료 - 결과 저장
+      const correctCount = newAnswers.filter(a => a.correct).length;
+      const u = await loadUsers();
+      if (u[nickname]) {
+        const updatedSets = quizSets.map(s => 
+          s.id === quizMode.setId 
+            ? { ...s, results: { completed: true, correct: correctCount, answers: newAnswers } }
+            : s
+        );
+        u[nickname].quizSets = updatedSets;
+        await saveUsers(u);
+        setQuizSets(updatedSets);
+      }
       setQuizMode({ ...quizMode, answers: newAnswers, showResult: true });
     }
   };
 
-  const clearWrongAnswer = async (quizId) => {
+  const clearWrongAnswer = async (setId, quizIdx) => {
     const u = await loadUsers();
     if (!u[nickname]) return;
-    const updatedWrong = wrongAnswers.filter(w => w.quizId !== quizId);
+    const updatedWrong = wrongAnswers.filter(w => !(w.setId === setId && w.quizIdx === quizIdx));
     u[nickname].wrongAnswers = updatedWrong;
     await saveUsers(u);
     setWrongAnswers(updatedWrong);
@@ -1357,7 +1354,7 @@ export default function App() {
                         📄 {materials.length}
                       </span>
                       <span style={{ fontSize:10, color: selectedPlanFilter === -1 ? "rgba(255,255,255,0.8)" : "#667799" }}>
-                        ❓ {quizzes.length}
+                        ❓ {quizSets.reduce((sum, s) => sum + s.quizzes.length, 0)}
                       </span>
                     </div>
                   </div>
@@ -1365,7 +1362,7 @@ export default function App() {
                   {/* 플랜별 카드 */}
                   {allPlans.map((p, pi) => {
                     const planMaterialCount = materials.filter(m => m.planIdx === pi).length;
-                    const planQuizCount = quizzes.filter(q => q.planIdx === pi).length;
+                    const planQuizCount = quizSets.filter(s => s.planIdx === pi).reduce((sum, s) => sum + s.quizzes.length, 0);
                     const planColors = ["#7C5CFC", "#22C97A", "#F7A34F", "#FF6B6B", "#38BDF8", "#E879F9"];
                     const cardColor = planColors[pi % planColors.length];
                     
@@ -1437,11 +1434,10 @@ export default function App() {
                     );
                   })}
                   
-                  {/* 미분류 카드 */}
+                  {/* 미분류 카드 - 참고자료만 */}
                   {(() => {
                     const unlinkedMaterials = materials.filter(m => m.planIdx === -1).length;
-                    const unlinkedQuizzes = quizzes.filter(q => q.planIdx === -1).length;
-                    if (unlinkedMaterials === 0 && unlinkedQuizzes === 0) return null;
+                    if (unlinkedMaterials === 0) return null;
                     return (
                       <div 
                         onClick={() => setSelectedPlanFilter(-2)}
@@ -1461,9 +1457,6 @@ export default function App() {
                           <span style={{ fontSize:10, color: selectedPlanFilter === -2 ? "rgba(255,255,255,0.8)" : "#667799" }}>
                             📄 {unlinkedMaterials}
                           </span>
-                          <span style={{ fontSize:10, color: selectedPlanFilter === -2 ? "rgba(255,255,255,0.8)" : "#667799" }}>
-                            ❓ {unlinkedQuizzes}
-                          </span>
                         </div>
                       </div>
                     );
@@ -1476,7 +1469,7 @@ export default function App() {
               <div style={{ display:"flex", gap:8, marginBottom:20 }}>
                 {[
                   { key:"materials", label:"📚 참고자료", count: selectedPlanFilter === -1 ? materials.length : selectedPlanFilter === -2 ? materials.filter(m => m.planIdx === -1).length : materials.filter(m => m.planIdx === selectedPlanFilter).length },
-                  { key:"quiz", label:"❓ 퀴즈", count: selectedPlanFilter === -1 ? quizzes.length : selectedPlanFilter === -2 ? quizzes.filter(q => q.planIdx === -1).length : quizzes.filter(q => q.planIdx === selectedPlanFilter).length },
+                  { key:"quiz", label:"❓ 퀴즈", count: selectedPlanFilter === -1 ? quizSets.length : selectedPlanFilter >= 0 ? quizSets.filter(s => s.planIdx === selectedPlanFilter).length : 0 },
                   { key:"wrongAnswers", label:"📕 오답노트", count: wrongAnswers.length },
                 ].map(tab => (
                   <button key={tab.key} onClick={() => setRecordView(tab.key)}
@@ -1621,122 +1614,187 @@ export default function App() {
               {/* 퀴즈 섹션 */}
               {recordView === "quiz" && !quizMode && (
                 <div>
-                  <div style={{ display:"flex", gap:10, marginBottom:16 }}>
-                    <button onClick={() => { setQuizForm({ question:"", options:["","","","",""], answer:0, planIdx: selectedPlanFilter >= 0 ? selectedPlanFilter : -1, tags:"" }); setQuizModal("add"); }}
-                      style={{ flex:1, padding:"14px", borderRadius:14, border:"none", background:"#1E1035", color:"#A78BFA", fontWeight:600, fontSize:12, cursor:"pointer" }}>
-                      ✏️ 직접 추가
-                    </button>
-                    <button onClick={() => setQuizModal("generate")}
-                      style={{ flex:1, padding:"14px", borderRadius:14, border:"none", background:`linear-gradient(135deg,${ACCENT},#A78BFA)`, color:"white", fontWeight:600, fontSize:12, cursor:"pointer" }}>
-                      🤖 AI 생성
-                    </button>
-                  </div>
+                  {/* AI 생성 버튼 */}
+                  <button onClick={() => setQuizModal("generate")}
+                    style={{ width:"100%", padding:"16px", borderRadius:14, border:"none", background:`linear-gradient(135deg,${ACCENT},#A78BFA)`, color:"white", fontWeight:700, fontSize:14, cursor:"pointer", marginBottom:16 }}>
+                    🤖 AI 퀴즈 생성 (10문제)
+                  </button>
                   
                   {(() => {
-                    const filteredQuizzes = selectedPlanFilter === -1 
-                      ? quizzes 
-                      : selectedPlanFilter === -2 
-                        ? quizzes.filter(q => q.planIdx === -1)
-                        : quizzes.filter(q => q.planIdx === selectedPlanFilter);
+                    const filteredSets = selectedPlanFilter === -1 
+                      ? quizSets 
+                      : quizSets.filter(s => s.planIdx === selectedPlanFilter);
                     
-                    if (filteredQuizzes.length === 0) {
+                    if (filteredSets.length === 0) {
                       return (
                         <div style={{ textAlign:"center", padding:"40px 0", color:"#556" }}>
                           <div style={{ fontSize:40, marginBottom:12 }}>❓</div>
                           <div style={{ fontSize:13 }}>
                             {selectedPlanFilter >= 0 
-                              ? `"${allPlans[selectedPlanFilter]?.title}"에 등록된 퀴즈가 없어요`
-                              : selectedPlanFilter === -2
-                                ? "미분류 퀴즈가 없어요"
-                                : "등록된 퀴즈가 없어요"}
+                              ? `"${allPlans[selectedPlanFilter]?.title}"에 퀴즈 세트가 없어요`
+                              : "퀴즈 세트가 없어요"}
                           </div>
-                          <div style={{ fontSize:11, color:"#444", marginTop:4 }}>직접 추가하거나 AI로 생성해보세요</div>
+                          <div style={{ fontSize:11, color:"#444", marginTop:4 }}>AI 생성 버튼을 눌러 퀴즈를 만들어보세요</div>
                         </div>
                       );
                     }
                     
                     return (
-                      <>
-                        {/* Quiz Action Buttons */}
-                        <div style={{ display:"flex", gap:10, marginBottom:16 }}>
-                          <button onClick={() => startQuiz(filteredQuizzes.map(q => q.id))}
-                            style={{ flex:2, padding:"14px", borderRadius:12, border:"none", background:"#22C97A", color:"white", fontWeight:700, fontSize:13, cursor:"pointer" }}>
-                            🎯 퀴즈 풀기 ({filteredQuizzes.length}문제)
-                          </button>
-                          {selectedPlanFilter >= 0 && (
-                            <button 
-                              onClick={() => generateAIQuiz(selectedPlanFilter, true)}
-                              disabled={generatingQuiz}
-                              style={{ 
-                                flex:1, 
-                                padding:"14px", 
-                                borderRadius:12, 
-                                border:"none", 
-                                background: generatingQuiz ? "#333" : "#7C5CFC", 
-                                color:"white", 
-                                fontWeight:700, 
-                                fontSize:12, 
-                                cursor: generatingQuiz ? "not-allowed" : "pointer",
-                                display:"flex",
-                                alignItems:"center",
-                                justifyContent:"center",
-                                gap:6
-                              }}>
-                              {generatingQuiz ? (
-                                <>
-                                  <div style={{ width:14, height:14, border:"2px solid white", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
-                                  생성중
-                                </>
-                              ) : (
-                                "🔄 재생성"
-                              )}
-                            </button>
-                          )}
-                        </div>
-                        
-                        {/* Quiz Info */}
+                      <div>
+                        {/* 재생성 버튼 */}
                         {selectedPlanFilter >= 0 && (
-                          <div style={{ background:"#1A1A30", borderRadius:10, padding:"10px 12px", marginBottom:16, fontSize:11, color:"#888", lineHeight:1.6 }}>
-                            💡 <strong style={{ color:"#A78BFA" }}>재생성</strong>을 누르면 기존 문제와 중복되지 않는 새로운 5문제가 추가돼요.
-                            {materials.filter(m => m.planIdx === selectedPlanFilter).length > 0 
-                              ? " 등록된 참고자료를 기반으로 출제됩니다."
-                              : " 신뢰할 수 있는 공식 자료 기반으로 출제됩니다."}
-                          </div>
+                          <button 
+                            onClick={() => generateAIQuiz(selectedPlanFilter)}
+                            disabled={generatingQuiz}
+                            style={{ 
+                              width:"100%", 
+                              padding:"14px", 
+                              borderRadius:12, 
+                              border:"1.5px solid #7C5CFC", 
+                              background: generatingQuiz ? "#333" : "transparent", 
+                              color: generatingQuiz ? "#888" : "#A78BFA", 
+                              fontWeight:600, 
+                              fontSize:13, 
+                              cursor: generatingQuiz ? "not-allowed" : "pointer",
+                              marginBottom:16,
+                              display:"flex",
+                              alignItems:"center",
+                              justifyContent:"center",
+                              gap:8
+                            }}>
+                            {generatingQuiz ? (
+                              <>
+                                <div style={{ width:16, height:16, border:"2px solid #A78BFA", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
+                                새 퀴즈 생성 중...
+                              </>
+                            ) : (
+                              "🔄 새 퀴즈 세트 생성 (+10문제)"
+                            )}
+                          </button>
                         )}
                         
-                        {/* Quiz List */}
-                        {filteredQuizzes.map((q, qi) => {
-                          const linkedPlan = q.planIdx >= 0 ? allPlans[q.planIdx] : null;
+                        <div style={{ fontSize:11, color:"#667799", marginBottom:12 }}>
+                          총 {filteredSets.length}개 세트 · {filteredSets.reduce((sum, s) => sum + s.quizzes.length, 0)}문제
+                        </div>
+                        
+                        {/* 세트 목록 - 아코디언 */}
+                        {filteredSets.map((set, si) => {
+                          const isExpanded = expandedSetId === set.id;
+                          const linkedPlan = set.planIdx >= 0 ? allPlans[set.planIdx] : null;
+                          const hasResult = set.results?.completed;
+                          const correctCount = set.results?.correct || 0;
+                          const totalCount = set.quizzes.length;
+                          
                           return (
-                            <div key={q.id} style={{ background:"#16162A", borderRadius:12, padding:"14px 16px", marginBottom:8, border:"1px solid #2A2A45" }}>
-                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                                <div style={{ flex:1 }}>
-                                  {selectedPlanFilter === -1 && linkedPlan && (
-                                    <div style={{ fontSize:9, color:"#A78BFA", marginBottom:6, background:"#1A1A30", padding:"3px 6px", borderRadius:4, display:"inline-block" }}>
-                                      📋 {linkedPlan.title}
+                            <div key={set.id} style={{ marginBottom:10 }}>
+                              {/* 세트 헤더 */}
+                              <div 
+                                onClick={() => setExpandedSetId(isExpanded ? null : set.id)}
+                                style={{ 
+                                  background:"#16162A", 
+                                  borderRadius: isExpanded ? "14px 14px 0 0" : "14px", 
+                                  padding:"16px", 
+                                  border:"1px solid #2A2A45",
+                                  borderBottom: isExpanded ? "none" : "1px solid #2A2A45",
+                                  cursor:"pointer",
+                                  transition:"all 0.2s"
+                                }}>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                                  <div style={{ flex:1 }}>
+                                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                                      <span style={{ fontSize:14, fontWeight:700, color:"white" }}>📝 세트 {filteredSets.length - si}</span>
+                                      {hasResult ? (
+                                        <span style={{ 
+                                          fontSize:11, 
+                                          fontWeight:700, 
+                                          padding:"3px 8px", 
+                                          borderRadius:99, 
+                                          background: correctCount >= totalCount * 0.8 ? "#0D2A1A" : correctCount >= totalCount * 0.5 ? "#2A2A10" : "#2A1010",
+                                          color: correctCount >= totalCount * 0.8 ? "#22C97A" : correctCount >= totalCount * 0.5 ? "#F7A34F" : "#FF6B6B"
+                                        }}>
+                                          {correctCount}/{totalCount} 맞춤
+                                        </span>
+                                      ) : (
+                                        <span style={{ fontSize:10, color:"#667799", background:"#1A1A30", padding:"3px 8px", borderRadius:99 }}>
+                                          ⏳ 미풀이
+                                        </span>
+                                      )}
                                     </div>
-                                  )}
-                                  <div style={{ fontSize:13, fontWeight:600, color:"white", marginBottom:6 }}>Q{qi+1}. {q.question}</div>
-                                  {q.source && (
-                                    <div style={{ fontSize:9, color:"#667799", marginBottom:6 }}>📚 출처: {q.source}</div>
-                                  )}
-                                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                                    {q.tags?.map((tag, ti) => (
-                                      <span key={ti} style={{ fontSize:9, background:"#2A2A45", color:"#888", padding:"2px 6px", borderRadius:99 }}>#{tag}</span>
-                                    ))}
+                                    <div style={{ fontSize:11, color:"#667799" }}>
+                                      {linkedPlan && <span style={{ color:"#A78BFA" }}>📋 {linkedPlan.title} · </span>}
+                                      {set.createdAt?.replace(/-/g, ".")} 생성
+                                    </div>
+                                  </div>
+                                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); startQuizSet(set.id); }}
+                                      style={{ fontSize:11, color:"white", background:"#22C97A", border:"none", borderRadius:8, padding:"8px 12px", cursor:"pointer", fontWeight:600 }}>
+                                      {hasResult ? "다시 풀기" : "풀기"}
+                                    </button>
+                                    <span style={{ fontSize:16, color:"#667799", transition:"transform 0.2s", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
                                   </div>
                                 </div>
-                                <button onClick={() => deleteQuiz(q.id)}
-                                  style={{ fontSize:10, color:"#E05555", background:"#2A1010", border:"none", borderRadius:7, padding:"4px 8px", cursor:"pointer", flexShrink:0, marginLeft:10 }}>삭제</button>
                               </div>
+                              
+                              {/* 문제 목록 (아코디언 펼침) */}
+                              {isExpanded && (
+                                <div style={{ 
+                                  background:"#0E0E1A", 
+                                  borderRadius:"0 0 14px 14px", 
+                                  border:"1px solid #2A2A45",
+                                  borderTop:"none",
+                                  padding:"12px"
+                                }}>
+                                  {set.quizzes.map((q, qi) => {
+                                    const answered = set.results?.answers?.[qi];
+                                    return (
+                                      <div key={qi} style={{ 
+                                        background:"#16162A", 
+                                        borderRadius:10, 
+                                        padding:"12px 14px", 
+                                        marginBottom: qi < set.quizzes.length - 1 ? 8 : 0,
+                                        borderLeft: answered ? `3px solid ${answered.correct ? "#22C97A" : "#FF6B6B"}` : "3px solid #2A2A45"
+                                      }}>
+                                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                                          <div style={{ flex:1 }}>
+                                            <div style={{ fontSize:12, fontWeight:600, color:"white", marginBottom:4 }}>
+                                              Q{qi + 1}. {q.question}
+                                            </div>
+                                            {q.source && (
+                                              <div style={{ fontSize:9, color:"#556" }}>📚 {q.source}</div>
+                                            )}
+                                          </div>
+                                          {answered && (
+                                            <span style={{ fontSize:16, marginLeft:8, flexShrink:0 }}>
+                                              {answered.correct ? "✅" : "❌"}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {answered && !answered.correct && (
+                                          <div style={{ marginTop:8, padding:"8px 10px", background:"#0D1A10", borderRadius:6, fontSize:11 }}>
+                                            <div style={{ color:"#FF6B6B", marginBottom:2 }}>내 답: {q.options[answered.selected]}</div>
+                                            <div style={{ color:"#22C97A" }}>정답: {q.options[q.answer]}</div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                  
+                                  {/* 삭제 버튼 */}
+                                  <button 
+                                    onClick={() => deleteQuizSet(set.id)}
+                                    style={{ width:"100%", marginTop:12, padding:"10px", borderRadius:8, border:"1px solid #FF6B6B33", background:"#2A1010", color:"#FF6B6B", fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                                    🗑 이 세트 삭제
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
-                        
-                        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                      </>
+                      </div>
                     );
                   })()}
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                 </div>
               )}
 
@@ -1744,18 +1802,19 @@ export default function App() {
               {recordView === "quiz" && quizMode && !quizMode.showResult && (
                 <div>
                   {(() => {
-                    const currentQuizId = quizMode.quizIds[quizMode.currentIdx];
-                    const currentQuiz = quizzes.find(q => q.id === currentQuizId);
+                    const set = quizSets.find(s => s.id === quizMode.setId);
+                    if (!set) return null;
+                    const currentQuiz = set.quizzes[quizMode.currentIdx];
                     if (!currentQuiz) return null;
                     
                     return (
                       <div style={{ background:"#16162A", borderRadius:20, padding:"24px 20px", border:"1px solid #2A2A45" }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-                          <span style={{ fontSize:12, color:"#667799" }}>문제 {quizMode.currentIdx + 1} / {quizMode.quizIds.length}</span>
+                          <span style={{ fontSize:12, color:"#667799" }}>문제 {quizMode.currentIdx + 1} / {set.quizzes.length}</span>
                           <button onClick={() => setQuizMode(null)} style={{ fontSize:11, color:"#888", background:"none", border:"none", cursor:"pointer" }}>✕ 종료</button>
                         </div>
                         <div style={{ background:"#0E0E1A", borderRadius:99, height:4, marginBottom:24 }}>
-                          <div style={{ background:ACCENT, height:"100%", width:`${((quizMode.currentIdx + 1) / quizMode.quizIds.length) * 100}%`, borderRadius:99, transition:"width 0.3s" }} />
+                          <div style={{ background:ACCENT, height:"100%", width:`${((quizMode.currentIdx + 1) / set.quizzes.length) * 100}%`, borderRadius:99, transition:"width 0.3s" }} />
                         </div>
                         <div style={{ fontSize:16, fontWeight:700, color:"white", marginBottom:24, lineHeight:1.6 }}>
                           {currentQuiz.question}
@@ -1789,38 +1848,60 @@ export default function App() {
               {/* 퀴즈 결과 */}
               {recordView === "quiz" && quizMode?.showResult && (
                 <div style={{ textAlign:"center" }}>
-                  <div style={{ background:"linear-gradient(135deg, #1A2035, #1E2845)", borderRadius:20, padding:"30px 24px", border:"1px solid #3A4A70", marginBottom:20 }}>
-                    <div style={{ fontSize:48, marginBottom:12 }}>🎉</div>
-                    <div style={{ fontSize:20, fontWeight:800, color:"white", marginBottom:8 }}>퀴즈 완료!</div>
-                    <div style={{ fontSize:32, fontWeight:800, color:"#22C97A" }}>
-                      {Object.values(quizMode.answers).filter(a => a.correct).length} / {quizMode.quizIds.length}
-                    </div>
-                    <div style={{ fontSize:13, color:"#667799", marginTop:8 }}>
-                      정답률 {Math.round((Object.values(quizMode.answers).filter(a => a.correct).length / quizMode.quizIds.length) * 100)}%
-                    </div>
-                  </div>
-                  
-                  {/* Wrong answers summary */}
-                  {Object.values(quizMode.answers).some(a => !a.correct) && (
-                    <div style={{ background:"#16162A", borderRadius:16, padding:"16px", marginBottom:20, border:"1px solid #2A2A45", textAlign:"left" }}>
-                      <div style={{ fontSize:13, fontWeight:700, color:"#FF6B6B", marginBottom:12 }}>❌ 틀린 문제</div>
-                      {Object.entries(quizMode.answers).filter(([,a]) => !a.correct).map(([qid]) => {
-                        const q = quizzes.find(quiz => quiz.id === Number(qid));
-                        return q ? (
-                          <div key={qid} style={{ fontSize:12, color:"#888", marginBottom:8, padding:"10px", background:"#0E0E1A", borderRadius:8 }}>
-                            <div style={{ color:"white", marginBottom:4 }}>{q.question}</div>
-                            <div style={{ color:"#22C97A", fontSize:11 }}>정답: {q.options[q.answer]}</div>
+                  {(() => {
+                    const set = quizSets.find(s => s.id === quizMode.setId);
+                    if (!set) return null;
+                    const correctCount = quizMode.answers.filter(a => a.correct).length;
+                    const totalCount = set.quizzes.length;
+                    const percentage = Math.round((correctCount / totalCount) * 100);
+                    
+                    return (
+                      <>
+                        <div style={{ background:"linear-gradient(135deg, #1A2035, #1E2845)", borderRadius:20, padding:"30px 24px", border:"1px solid #3A4A70", marginBottom:20 }}>
+                          <div style={{ fontSize:48, marginBottom:12 }}>
+                            {percentage >= 80 ? "🎉" : percentage >= 50 ? "👍" : "💪"}
                           </div>
-                        ) : null;
-                      })}
-                      <div style={{ fontSize:11, color:"#667799", marginTop:8 }}>💡 오답노트에 자동 저장되었어요</div>
-                    </div>
-                  )}
-                  
-                  <button onClick={() => setQuizMode(null)}
-                    style={{ width:"100%", padding:"16px", borderRadius:14, border:"none", background:ACCENT, color:"white", fontWeight:700, fontSize:14, cursor:"pointer" }}>
-                    확인
-                  </button>
+                          <div style={{ fontSize:20, fontWeight:800, color:"white", marginBottom:8 }}>퀴즈 완료!</div>
+                          <div style={{ fontSize:32, fontWeight:800, color: percentage >= 80 ? "#22C97A" : percentage >= 50 ? "#F7A34F" : "#FF6B6B" }}>
+                            {correctCount} / {totalCount}
+                          </div>
+                          <div style={{ fontSize:13, color:"#667799", marginTop:8 }}>
+                            정답률 {percentage}%
+                          </div>
+                        </div>
+                        
+                        {/* 틀린 문제 요약 */}
+                        {quizMode.answers.some(a => !a.correct) && (
+                          <div style={{ background:"#16162A", borderRadius:16, padding:"16px", marginBottom:20, border:"1px solid #2A2A45", textAlign:"left" }}>
+                            <div style={{ fontSize:13, fontWeight:700, color:"#FF6B6B", marginBottom:12 }}>❌ 틀린 문제</div>
+                            {quizMode.answers.map((ans, idx) => {
+                              if (ans.correct) return null;
+                              const q = set.quizzes[idx];
+                              return (
+                                <div key={idx} style={{ fontSize:12, color:"#888", marginBottom:8, padding:"10px", background:"#0E0E1A", borderRadius:8 }}>
+                                  <div style={{ color:"white", marginBottom:4 }}>Q{idx + 1}. {q.question}</div>
+                                  <div style={{ color:"#FF6B6B", fontSize:11, marginBottom:2 }}>내 답: {q.options[ans.selected]}</div>
+                                  <div style={{ color:"#22C97A", fontSize:11 }}>정답: {q.options[q.answer]}</div>
+                                </div>
+                              );
+                            })}
+                            <div style={{ fontSize:11, color:"#667799", marginTop:8 }}>💡 오답노트에 자동 저장되었어요</div>
+                          </div>
+                        )}
+                        
+                        <div style={{ display:"flex", gap:10 }}>
+                          <button onClick={() => { setQuizMode(null); startQuizSet(set.id); }}
+                            style={{ flex:1, padding:"14px", borderRadius:12, border:"1.5px solid #2A2A45", background:"transparent", color:"#A78BFA", fontWeight:600, fontSize:13, cursor:"pointer" }}>
+                            다시 풀기
+                          </button>
+                          <button onClick={() => setQuizMode(null)}
+                            style={{ flex:1, padding:"14px", borderRadius:12, border:"none", background:ACCENT, color:"white", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                            확인
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -1835,24 +1916,30 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <button onClick={() => startQuiz([...new Set(wrongAnswers.map(w => w.quizId))])}
-                        style={{ width:"100%", padding:"16px", borderRadius:14, border:"none", background:"#FF6B6B", color:"white", fontWeight:700, fontSize:14, cursor:"pointer", marginBottom:20 }}>
-                        🔥 오답 다시 풀기 ({[...new Set(wrongAnswers.map(w => w.quizId))].length}문제)
-                      </button>
+                      <div style={{ fontSize:11, color:"#667799", marginBottom:12 }}>
+                        총 {wrongAnswers.length}개 오답
+                      </div>
                       
-                      {[...new Set(wrongAnswers.map(w => w.quizId))].map(qid => {
-                        const q = quizzes.find(quiz => quiz.id === qid);
-                        const wrongCount = wrongAnswers.filter(w => w.quizId === qid).length;
+                      {wrongAnswers.map((wrong, wi) => {
+                        const set = quizSets.find(s => s.id === wrong.setId);
+                        if (!set) return null;
+                        const q = set.quizzes[wrong.quizIdx];
                         if (!q) return null;
+                        const linkedPlan = set.planIdx >= 0 ? allPlans[set.planIdx] : null;
+                        
                         return (
-                          <div key={qid} style={{ background:"#16162A", borderRadius:14, padding:"16px", marginBottom:10, border:"1px solid #FF6B6B33" }}>
+                          <div key={wi} style={{ background:"#16162A", borderRadius:14, padding:"16px", marginBottom:10, border:"1px solid #FF6B6B33" }}>
                             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                               <div style={{ flex:1 }}>
+                                {linkedPlan && (
+                                  <div style={{ fontSize:9, color:"#A78BFA", marginBottom:6 }}>📋 {linkedPlan.title}</div>
+                                )}
                                 <div style={{ fontSize:13, fontWeight:600, color:"white", marginBottom:8 }}>{q.question}</div>
+                                <div style={{ fontSize:12, color:"#FF6B6B", marginBottom:4 }}>✗ 내 답: {q.options[wrong.selectedAnswer]}</div>
                                 <div style={{ fontSize:12, color:"#22C97A", marginBottom:6 }}>✓ 정답: {q.options[q.answer]}</div>
-                                <div style={{ fontSize:10, color:"#FF6B6B" }}>틀린 횟수: {wrongCount}회</div>
+                                <div style={{ fontSize:10, color:"#556" }}>{wrong.answeredAt?.replace(/-/g, ".")}</div>
                               </div>
-                              <button onClick={() => clearWrongAnswer(qid)}
+                              <button onClick={() => clearWrongAnswer(wrong.setId, wrong.quizIdx)}
                                 style={{ fontSize:10, color:"#22C97A", background:"#0D2A1A", border:"1px solid #22C97A44", borderRadius:7, padding:"5px 10px", cursor:"pointer", flexShrink:0, marginLeft:10 }}>
                                 ✓ 완료
                               </button>
@@ -1919,7 +2006,7 @@ export default function App() {
                     <div style={{ fontSize:10, color:"#667799" }}>참고자료</div>
                   </div>
                   <div style={{ background:"#0E0E1A", borderRadius:10, padding:"12px", textAlign:"center" }}>
-                    <div style={{ fontSize:18, fontWeight:800, color:"#22C97A" }}>{quizzes.length}</div>
+                    <div style={{ fontSize:18, fontWeight:800, color:"#22C97A" }}>{quizSets.reduce((sum, s) => sum + s.quizzes.length, 0)}</div>
                     <div style={{ fontSize:10, color:"#667799" }}>퀴즈</div>
                   </div>
                 </div>
@@ -2387,90 +2474,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Quiz Add Modal */}
-        {quizModal === "add" && (
-          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:"0 24px" }}
-            onClick={() => setQuizModal(null)}>
-            <div style={{ background:"#16162A", borderRadius:20, padding:"24px", width:"100%", maxWidth:440, maxHeight:"85vh", overflow:"auto", border:"1px solid #2A2A45" }}
-              onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize:18, fontWeight:800, color:"white", marginBottom:20 }}>✏️ 퀴즈 직접 추가</div>
-              
-              {/* 문제 */}
-              <div style={{ marginBottom:16 }}>
-                <div style={{ fontSize:12, fontWeight:600, color:"#AAA", marginBottom:8 }}>문제 *</div>
-                <textarea value={quizForm.question} onChange={e => setQuizForm(f => ({ ...f, question: e.target.value }))}
-                  placeholder="문제를 입력하세요"
-                  rows={2}
-                  style={{ width:"100%", padding:"12px 14px", borderRadius:12, border:"1.5px solid #2A2A45", background:"#0E0E1A", color:"white", fontSize:13, outline:"none", boxSizing:"border-box", resize:"none" }} />
-              </div>
-
-              {/* 선택지 */}
-              <div style={{ marginBottom:16 }}>
-                <div style={{ fontSize:12, fontWeight:600, color:"#AAA", marginBottom:8 }}>선택지 (5개)</div>
-                {quizForm.options.map((opt, oi) => (
-                  <div key={oi} style={{ display:"flex", gap:8, marginBottom:8 }}>
-                    <button onClick={() => setQuizForm(f => ({ ...f, answer: oi }))}
-                      style={{
-                        width:36,
-                        height:36,
-                        borderRadius:8,
-                        border: quizForm.answer === oi ? `2px solid #22C97A` : "1px solid #2A2A45",
-                        background: quizForm.answer === oi ? "#22C97A22" : "#0E0E1A",
-                        color: quizForm.answer === oi ? "#22C97A" : "#666",
-                        fontWeight:700,
-                        fontSize:12,
-                        cursor:"pointer",
-                        flexShrink:0
-                      }}>
-                      {oi + 1}
-                    </button>
-                    <input value={opt} onChange={e => {
-                      const newOpts = [...quizForm.options];
-                      newOpts[oi] = e.target.value;
-                      setQuizForm(f => ({ ...f, options: newOpts }));
-                    }}
-                      placeholder={`선택지 ${oi + 1}`}
-                      style={{ flex:1, padding:"10px 12px", borderRadius:10, border:"1.5px solid #2A2A45", background:"#0E0E1A", color:"white", fontSize:12, outline:"none", boxSizing:"border-box" }} />
-                  </div>
-                ))}
-                <div style={{ fontSize:10, color:"#22C97A", marginTop:4 }}>💡 정답 번호를 클릭해서 선택하세요</div>
-              </div>
-
-              {/* 연결 플랜 */}
-              <div style={{ marginBottom:16 }}>
-                <div style={{ fontSize:12, fontWeight:600, color:"#AAA", marginBottom:8 }}>연결할 플랜</div>
-                <select value={quizForm.planIdx} onChange={e => setQuizForm(f => ({ ...f, planIdx: Number(e.target.value) }))}
-                  style={{ width:"100%", padding:"12px 14px", borderRadius:12, border:"1.5px solid #2A2A45", background:"#0E0E1A", color:"white", fontSize:13, outline:"none", boxSizing:"border-box" }}>
-                  <option value={-1}>플랜 미지정</option>
-                  {allPlans.map((p, i) => (
-                    <option key={i} value={i}>{p.title}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 태그 */}
-              <div style={{ marginBottom:20 }}>
-                <div style={{ fontSize:12, fontWeight:600, color:"#AAA", marginBottom:8 }}>태그 (쉼표로 구분)</div>
-                <input value={quizForm.tags} onChange={e => setQuizForm(f => ({ ...f, tags: e.target.value }))}
-                  placeholder="예: 1과목, 기출"
-                  style={{ width:"100%", padding:"12px 14px", borderRadius:12, border:"1.5px solid #2A2A45", background:"#0E0E1A", color:"white", fontSize:13, outline:"none", boxSizing:"border-box" }} />
-              </div>
-
-              {/* 버튼 */}
-              <div style={{ display:"flex", gap:10 }}>
-                <button onClick={() => setQuizModal(null)}
-                  style={{ flex:1, padding:"14px 0", borderRadius:12, border:"1px solid #2A2A45", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13 }}>
-                  취소
-                </button>
-                <button onClick={saveQuiz} disabled={!quizForm.question.trim() || quizForm.options.some(o => !o.trim())}
-                  style={{ flex:2, padding:"14px 0", borderRadius:12, border:"none", background: (quizForm.question.trim() && !quizForm.options.some(o => !o.trim())) ? `linear-gradient(135deg,${ACCENT},#A78BFA)` : "#333", color:"white", fontWeight:700, cursor: (quizForm.question.trim() && !quizForm.options.some(o => !o.trim())) ? "pointer" : "not-allowed", fontSize:13 }}>
-                  저장하기
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Quiz Generate Modal */}
         {quizModal === "generate" && (
           <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:"0 24px" }}
@@ -2478,14 +2481,14 @@ export default function App() {
             <div style={{ background:"#16162A", borderRadius:20, padding:"24px", width:"100%", maxWidth:400, border:"1px solid #2A2A45" }}
               onClick={e => e.stopPropagation()}>
               <div style={{ fontSize:18, fontWeight:800, color:"white", marginBottom:8 }}>🤖 AI 퀴즈 생성</div>
-              <div style={{ fontSize:12, color:"#667799", marginBottom:20 }}>플랜과 참고자료를 바탕으로 <strong style={{ color:"#22C97A" }}>5문제</strong>를 자동 생성해요</div>
+              <div style={{ fontSize:12, color:"#667799", marginBottom:20 }}>플랜과 참고자료를 바탕으로 <strong style={{ color:"#22C97A" }}>10문제 세트</strong>를 자동 생성해요</div>
               
               {generatingQuiz ? (
                 <div style={{ textAlign:"center", padding:"30px 0" }}>
                   <div style={{ width:40, height:40, border:`3px solid ${ACCENT}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
                   <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-                  <div style={{ fontSize:13, color:"#A78BFA" }}>AI가 5문제를 생성 중이에요...</div>
-                  <div style={{ fontSize:11, color:"#556", marginTop:4 }}>잠시만 기다려주세요 (약 10~20초)</div>
+                  <div style={{ fontSize:13, color:"#A78BFA" }}>AI가 10문제를 생성 중이에요...</div>
+                  <div style={{ fontSize:11, color:"#556", marginTop:4 }}>잠시만 기다려주세요 (약 20~30초)</div>
                 </div>
               ) : (
                 <>
@@ -2498,8 +2501,9 @@ export default function App() {
                     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                       {allPlans.map((p, i) => {
                         const planMaterials = materials.filter(m => m.planIdx === i);
+                        const existingSets = quizSets.filter(s => s.planIdx === i);
                         return (
-                          <button key={i} onClick={() => generateAIQuiz(i, false)}
+                          <button key={i} onClick={() => generateAIQuiz(i)}
                             style={{
                               width:"100%",
                               padding:"16px",
@@ -2512,7 +2516,9 @@ export default function App() {
                             }}>
                             <div style={{ fontSize:14, fontWeight:700, marginBottom:4 }}>{p.title}</div>
                             <div style={{ fontSize:11, color:"#667799" }}>
-                              📚 참고자료 {planMaterials.length}개 {planMaterials.length === 0 && "· 공식자료 기반 출제"}
+                              📚 참고자료 {planMaterials.length}개 · 
+                              퀴즈 세트 {existingSets.length}개
+                              {planMaterials.length === 0 && " · 공식자료 기반 출제"}
                             </div>
                           </button>
                         );
