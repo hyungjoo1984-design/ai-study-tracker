@@ -188,6 +188,12 @@ export default function App() {
   const [generatingQuiz, setGeneratingQuiz]= useState(false);
   const [selectedPlanFilter, setSelectedPlanFilter] = useState(-1); // -1 = all, index = specific plan
   const [expandedSetId,  setExpandedSetId] = useState(null); // for accordion
+  const [editDateModal,  setEditDateModal] = useState(null); // { planIdx, currentDate }
+  const [newExamDate,    setNewExamDate]   = useState("");
+  const [updatingDate,   setUpdatingDate]  = useState(false);
+  const [quizModalStep,  setQuizModalStep] = useState("selectPlan"); // "selectPlan" | "selectDays"
+  const [selectedQuizPlanIdx, setSelectedQuizPlanIdx] = useState(null);
+  const [selectedQuizDays, setSelectedQuizDays] = useState([]); // array of day numbers
 
   useEffect(() => {
     (async () => {
@@ -315,6 +321,67 @@ export default function App() {
     u[nickname].plans.splice(idx, 1);
     setUsers({ ...u }); await saveUsers(u);
     setDeleteConfirmPlan(null); setScreen("dashboard");
+  };
+
+  const updateExamDate = async () => {
+    if (!editDateModal || !newExamDate) return;
+    if (newExamDate <= today()) {
+      alert("시험일은 오늘 이후여야 해요.");
+      return;
+    }
+    
+    setUpdatingDate(true);
+    try {
+      const plan = allPlans[editDateModal.planIdx];
+      if (!plan) return;
+      
+      // AI로 새 스케줄 생성
+      const res = await fetch("/api/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          field: plan.title,
+          examDate: newExamDate,
+          dailyHours: "1",
+          background: "",
+          notes: "기존 플랜 날짜 변경으로 인한 재생성",
+          includeSubtasks: plan.schedule?.[0]?.subtasks?.length > 0
+        })
+      });
+      
+      if (!res.ok) throw new Error("스케줄 재생성 실패");
+      
+      const newPlan = await res.json();
+      
+      const u = await loadUsers();
+      if (!u[nickname]?.plans?.[editDateModal.planIdx]) return;
+      
+      // 기존 플랜 업데이트 (제목 유지, 스케줄/날짜 변경, 기록 초기화)
+      u[nickname].plans[editDateModal.planIdx] = {
+        ...u[nickname].plans[editDateModal.planIdx],
+        examDate: newExamDate,
+        subjects: newPlan.subjects,
+        schedule: newPlan.schedule,
+        logs: {} // 학습 기록 초기화
+      };
+      
+      await saveUsers(u);
+      setUsers({ ...u });
+      
+      // 현재 보고 있는 플랜이면 logs도 초기화
+      if (activePlanIdx === editDateModal.planIdx) {
+        setLogs({});
+      }
+      
+      setEditDateModal(null);
+      setNewExamDate("");
+      alert("시험일이 변경되고 스케줄이 재생성되었어요!");
+    } catch (e) {
+      console.error("Date update failed:", e);
+      alert("날짜 변경 중 오류가 발생했어요. 다시 시도해주세요.");
+    } finally {
+      setUpdatingDate(false);
+    }
   };
 
   const openLog = (day) => {
@@ -496,11 +563,21 @@ export default function App() {
     setQuizSets(updatedSets);
   };
 
-  const generateAIQuiz = async (planIdx) => {
+  const generateAIQuiz = async (planIdx, selectedDays = []) => {
     setGeneratingQuiz(true);
     try {
       const plan = allPlans[planIdx];
       const planMaterials = materials.filter(m => m.planIdx === planIdx);
+      
+      // 선택한 날짜들의 topic 추출 (없으면 전체)
+      let selectedTopics = "";
+      if (selectedDays.length > 0 && plan?.schedule) {
+        const topics = plan.schedule
+          .filter(d => selectedDays.includes(d.day))
+          .map(d => `- Day ${d.day}: ${d.topic}`)
+          .join("\n");
+        selectedTopics = topics;
+      }
       
       // 기존 퀴즈 질문들 (중복 방지용)
       const existingQuestions = quizSets
@@ -514,7 +591,8 @@ export default function App() {
         body: JSON.stringify({
           planTitle: plan?.title || "일반 학습",
           materials: planMaterials.map(m => `- ${m.title} (${m.type}): ${m.notes || "메모 없음"}`).join("\n") || "등록된 자료 없음",
-          existingQuestions: existingQuestions
+          existingQuestions: existingQuestions,
+          selectedTopics: selectedTopics
         })
       });
       
@@ -539,6 +617,7 @@ export default function App() {
           source: q.source || "AI생성"
         })),
         createdAt: today(),
+        topicLabel: selectedDays.length > 0 ? `Day ${selectedDays.join(", ")}` : "전체",
         results: null // { completed: true, correct: 7, answers: [...] }
       };
       
@@ -547,6 +626,9 @@ export default function App() {
       await saveUsers(u);
       setQuizSets(updatedSets);
       setQuizModal(null);
+      setQuizModalStep("selectPlan");
+      setSelectedQuizPlanIdx(null);
+      setSelectedQuizDays([]);
     } catch (e) {
       console.error("Quiz generation failed:", e);
       alert("퀴즈 생성 중 오류가 발생했어요. 다시 시도해주세요.");
@@ -790,7 +872,15 @@ export default function App() {
                               {isExpired && <span style={{ fontSize:9, background:"#2A2A2A", color:"#555", borderRadius:99, padding:"2px 7px", fontWeight:700, flexShrink:0 }}>종료</span>}
                               {isUrgent  && <span style={{ fontSize:9, background:"#FF6B6B22", color:"#FF6B6B", borderRadius:99, padding:"2px 7px", fontWeight:700, flexShrink:0 }}>D-{pDaysLeft}</span>}
                             </div>
-                            <div style={{ fontSize:11, color:"#445566" }}>시험일 {fmt(p.examDate)}{!isExpired&&<span style={{ color:isUrgent?"#FF6B6B":"#6677AA", marginLeft:6 }}>· D-{pDaysLeft}</span>}</div>
+                            <div style={{ fontSize:11, color:"#445566", display:"flex", alignItems:"center", gap:6 }}>
+                              시험일 {fmt(p.examDate)}
+                              <button 
+                                onClick={e => { e.stopPropagation(); setEditDateModal({ planIdx: i, currentDate: p.examDate }); setNewExamDate(p.examDate); }}
+                                style={{ background:"none", border:"none", color:"#667799", cursor:"pointer", padding:0, fontSize:12 }}>
+                                ✏️
+                              </button>
+                              {!isExpired&&<span style={{ color:isUrgent?"#FF6B6B":"#6677AA" }}>· D-{pDaysLeft}</span>}
+                            </div>
                           </div>
                           <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6, marginLeft:12, flexShrink:0 }}>
                             <button onClick={e => { e.stopPropagation(); setDeleteConfirmPlan(i); }}
@@ -1615,7 +1705,7 @@ export default function App() {
               {recordView === "quiz" && !quizMode && (
                 <div>
                   {/* AI 생성 버튼 */}
-                  <button onClick={() => setQuizModal("generate")}
+                  <button onClick={() => { setQuizModalStep("selectPlan"); setSelectedQuizPlanIdx(null); setSelectedQuizDays([]); setQuizModal("generate"); }}
                     style={{ width:"100%", padding:"16px", borderRadius:14, border:"none", background:`linear-gradient(135deg,${ACCENT},#A78BFA)`, color:"white", fontWeight:700, fontSize:14, cursor:"pointer", marginBottom:16 }}>
                     🤖 AI 퀴즈 생성 (10문제)
                   </button>
@@ -1644,7 +1734,12 @@ export default function App() {
                         {/* 재생성 버튼 */}
                         {selectedPlanFilter >= 0 && (
                           <button 
-                            onClick={() => generateAIQuiz(selectedPlanFilter)}
+                            onClick={() => { 
+                              setSelectedQuizPlanIdx(selectedPlanFilter); 
+                              setSelectedQuizDays([]); 
+                              setQuizModalStep("selectDays"); 
+                              setQuizModal("generate"); 
+                            }}
                             disabled={generatingQuiz}
                             style={{ 
                               width:"100%", 
@@ -1668,7 +1763,7 @@ export default function App() {
                                 새 퀴즈 생성 중...
                               </>
                             ) : (
-                              "🔄 새 퀴즈 세트 생성 (+10문제)"
+                              "🔄 새 퀴즈 세트 생성 (범위 선택)"
                             )}
                           </button>
                         )}
@@ -1722,6 +1817,7 @@ export default function App() {
                                     </div>
                                     <div style={{ fontSize:11, color:"#667799" }}>
                                       {linkedPlan && <span style={{ color:"#A78BFA" }}>📋 {linkedPlan.title} · </span>}
+                                      {set.topicLabel && <span style={{ color:"#22C97A" }}>📚 {set.topicLabel} · </span>}
                                       {set.createdAt?.replace(/-/g, ".")} 생성
                                     </div>
                                   </div>
@@ -2046,6 +2142,52 @@ export default function App() {
                 <button onClick={() => setDeleteConfirmPlan(null)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"1px solid #2A2A45", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13 }}>취소</button>
                 <button onClick={() => deletePlan(deleteConfirmPlan)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"none", background:"#E05555", color:"white", fontWeight:700, cursor:"pointer", fontSize:13 }}>삭제</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Date Modal (Dashboard) */}
+        {editDateModal && (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:"0 24px" }} onClick={()=>!updatingDate && setEditDateModal(null)}>
+            <div style={{ background:"#16162A", borderRadius:20, padding:"28px 24px", width:"100%", maxWidth:380, textAlign:"center", border:"1px solid #2A2A45" }} onClick={e=>e.stopPropagation()}>
+              {updatingDate ? (
+                <>
+                  <div style={{ width:48, height:48, border:`3px solid ${ACCENT}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 20px" }} />
+                  <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                  <div style={{ fontSize:15, fontWeight:700, color:"white", marginBottom:8 }}>스케줄 재생성 중...</div>
+                  <div style={{ fontSize:12, color:"#667799", lineHeight:1.6 }}>AI가 새 날짜에 맞춰<br/>학습 스케줄을 다시 만들고 있어요</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize:36, marginBottom:12 }}>📅</div>
+                  <div style={{ fontSize:16, fontWeight:800, color:"white", marginBottom:6 }}>시험일 변경</div>
+                  <div style={{ fontSize:12, color:"#667799", marginBottom:20, lineHeight:1.6 }}>
+                    새 날짜에 맞춰 AI가 스케줄을 재생성해요.<br/>
+                    <span style={{ color:"#FF6B6B" }}>⚠️ 기존 학습 기록은 초기화됩니다.</span>
+                  </div>
+                  
+                  <div style={{ marginBottom:20 }}>
+                    <div style={{ fontSize:11, color:"#667799", marginBottom:6, textAlign:"left" }}>현재 시험일: {fmt(editDateModal.currentDate)}</div>
+                    <input 
+                      type="date" 
+                      value={newExamDate} 
+                      onChange={e => setNewExamDate(e.target.value)}
+                      min={new Date(Date.now() + 86400000).toISOString().slice(0,10)}
+                      style={{ width:"100%", padding:"12px 14px", borderRadius:10, border:"1.5px solid #2A2A45", background:"#0E0E1A", color:"white", fontSize:14, outline:"none", boxSizing:"border-box", colorScheme:"dark" }} 
+                    />
+                  </div>
+                  
+                  <div style={{ display:"flex", gap:10 }}>
+                    <button onClick={()=>setEditDateModal(null)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"1px solid #2A2A45", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13 }}>취소</button>
+                    <button 
+                      onClick={updateExamDate} 
+                      disabled={!newExamDate || newExamDate === editDateModal.currentDate}
+                      style={{ flex:1, padding:"13px 0", borderRadius:12, border:"none", background: (newExamDate && newExamDate !== editDateModal.currentDate) ? ACCENT : "#333", color:"white", fontWeight:700, cursor: (newExamDate && newExamDate !== editDateModal.currentDate) ? "pointer" : "not-allowed", fontSize:13 }}>
+                      변경하기
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -2477,11 +2619,9 @@ export default function App() {
         {/* Quiz Generate Modal */}
         {quizModal === "generate" && (
           <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:"0 24px" }}
-            onClick={() => !generatingQuiz && setQuizModal(null)}>
-            <div style={{ background:"#16162A", borderRadius:20, padding:"24px", width:"100%", maxWidth:400, border:"1px solid #2A2A45" }}
+            onClick={() => !generatingQuiz && (quizModalStep === "selectDays" ? (setQuizModalStep("selectPlan"), setSelectedQuizPlanIdx(null), setSelectedQuizDays([])) : setQuizModal(null))}>
+            <div style={{ background:"#16162A", borderRadius:20, padding:"24px", width:"100%", maxWidth:450, maxHeight:"80vh", border:"1px solid #2A2A45", display:"flex", flexDirection:"column" }}
               onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize:18, fontWeight:800, color:"white", marginBottom:8 }}>🤖 AI 퀴즈 생성</div>
-              <div style={{ fontSize:12, color:"#667799", marginBottom:20 }}>플랜과 참고자료를 바탕으로 <strong style={{ color:"#22C97A" }}>10문제 세트</strong>를 자동 생성해요</div>
               
               {generatingQuiz ? (
                 <div style={{ textAlign:"center", padding:"30px 0" }}>
@@ -2490,8 +2630,11 @@ export default function App() {
                   <div style={{ fontSize:13, color:"#A78BFA" }}>AI가 10문제를 생성 중이에요...</div>
                   <div style={{ fontSize:11, color:"#556", marginTop:4 }}>잠시만 기다려주세요 (약 20~30초)</div>
                 </div>
-              ) : (
+              ) : quizModalStep === "selectPlan" ? (
                 <>
+                  <div style={{ fontSize:18, fontWeight:800, color:"white", marginBottom:8 }}>🤖 AI 퀴즈 생성</div>
+                  <div style={{ fontSize:12, color:"#667799", marginBottom:20 }}>퀴즈를 생성할 플랜을 선택하세요</div>
+                  
                   {allPlans.length === 0 ? (
                     <div style={{ textAlign:"center", padding:"20px 0", color:"#556" }}>
                       <div style={{ fontSize:13, marginBottom:8 }}>플랜이 없어요</div>
@@ -2500,10 +2643,9 @@ export default function App() {
                   ) : (
                     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                       {allPlans.map((p, i) => {
-                        const planMaterials = materials.filter(m => m.planIdx === i);
                         const existingSets = quizSets.filter(s => s.planIdx === i);
                         return (
-                          <button key={i} onClick={() => generateAIQuiz(i)}
+                          <button key={i} onClick={() => { setSelectedQuizPlanIdx(i); setQuizModalStep("selectDays"); setSelectedQuizDays([]); }}
                             style={{
                               width:"100%",
                               padding:"16px",
@@ -2516,9 +2658,7 @@ export default function App() {
                             }}>
                             <div style={{ fontSize:14, fontWeight:700, marginBottom:4 }}>{p.title}</div>
                             <div style={{ fontSize:11, color:"#667799" }}>
-                              📚 참고자료 {planMaterials.length}개 · 
-                              퀴즈 세트 {existingSets.length}개
-                              {planMaterials.length === 0 && " · 공식자료 기반 출제"}
+                              📅 {p.schedule?.length || 0}일 스케줄 · 퀴즈 세트 {existingSets.length}개
                             </div>
                           </button>
                         );
@@ -2529,6 +2669,86 @@ export default function App() {
                   <button onClick={() => setQuizModal(null)}
                     style={{ width:"100%", padding:"14px 0", borderRadius:12, border:"1px solid #2A2A45", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13, marginTop:16 }}>
                     취소
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+                    <button onClick={() => { setQuizModalStep("selectPlan"); setSelectedQuizPlanIdx(null); setSelectedQuizDays([]); }}
+                      style={{ background:"none", border:"none", color:"#888", cursor:"pointer", fontSize:16, padding:0 }}>←</button>
+                    <div>
+                      <div style={{ fontSize:16, fontWeight:800, color:"white" }}>📚 출제 범위 선택</div>
+                      <div style={{ fontSize:11, color:"#667799", marginTop:2 }}>{allPlans[selectedQuizPlanIdx]?.title}</div>
+                    </div>
+                  </div>
+                  
+                  {/* 전체 선택 / 해제 */}
+                  <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+                    <button 
+                      onClick={() => setSelectedQuizDays(allPlans[selectedQuizPlanIdx]?.schedule?.map(d => d.day) || [])}
+                      style={{ flex:1, padding:"10px", borderRadius:8, border:"1px solid #2A2A45", background:"#0E0E1A", color:"#A78BFA", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                      ✅ 전체 선택
+                    </button>
+                    <button 
+                      onClick={() => setSelectedQuizDays([])}
+                      style={{ flex:1, padding:"10px", borderRadius:8, border:"1px solid #2A2A45", background:"#0E0E1A", color:"#888", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                      ❌ 전체 해제
+                    </button>
+                  </div>
+                  
+                  <div style={{ fontSize:11, color:"#556", marginBottom:8 }}>
+                    {selectedQuizDays.length}개 선택됨 {selectedQuizDays.length === 0 && "(전체 범위에서 출제)"}
+                  </div>
+                  
+                  {/* 날짜 목록 */}
+                  <div style={{ flex:1, overflowY:"auto", marginBottom:16, maxHeight:"40vh" }}>
+                    {allPlans[selectedQuizPlanIdx]?.schedule?.map((day, di) => {
+                      const isSelected = selectedQuizDays.includes(day.day);
+                      return (
+                        <div 
+                          key={day.day}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedQuizDays(selectedQuizDays.filter(d => d !== day.day));
+                            } else {
+                              setSelectedQuizDays([...selectedQuizDays, day.day]);
+                            }
+                          }}
+                          style={{ 
+                            display:"flex", 
+                            alignItems:"center", 
+                            gap:12, 
+                            padding:"12px", 
+                            background: isSelected ? "#1A1035" : "#0E0E1A", 
+                            borderRadius:10, 
+                            marginBottom:6, 
+                            cursor:"pointer",
+                            border: isSelected ? `1.5px solid ${ACCENT}` : "1.5px solid #2A2A45",
+                            transition:"all 0.15s"
+                          }}>
+                          <div style={{ 
+                            width:20, height:20, borderRadius:4, 
+                            background: isSelected ? ACCENT : "transparent", 
+                            border: isSelected ? "none" : "2px solid #3A3A5A",
+                            display:"flex", alignItems:"center", justifyContent:"center",
+                            flexShrink:0
+                          }}>
+                            {isSelected && <span style={{ color:"white", fontSize:12 }}>✓</span>}
+                          </div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:11, color:"#667799", marginBottom:2 }}>Day {day.day} · {day.date?.replace(/-/g, ".")}</div>
+                            <div style={{ fontSize:12, fontWeight:600, color:"white", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{day.topic}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* 생성 버튼 */}
+                  <button 
+                    onClick={() => generateAIQuiz(selectedQuizPlanIdx, selectedQuizDays)}
+                    style={{ width:"100%", padding:"14px 0", borderRadius:12, border:"none", background:`linear-gradient(135deg,${ACCENT},#A78BFA)`, color:"white", fontWeight:700, cursor:"pointer", fontSize:14 }}>
+                    🤖 {selectedQuizDays.length > 0 ? `선택한 ${selectedQuizDays.length}개 범위에서` : "전체 범위에서"} 퀴즈 생성
                   </button>
                 </>
               )}
@@ -2739,11 +2959,25 @@ export default function App() {
 
         {view === "schedule" && weekGroups.map((days,wi) => {
           const doneCnt=days.filter(d=>logs[d.day]?.done).length;
+          const weekDayNumbers = days.map(d => d.day);
           return (
             <div key={wi} style={{ marginBottom:16 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
                 <span style={{ fontSize:11, fontWeight:700, color:"#999" }}>{wi+1}주차</span>
-                <span style={{ fontSize:10, color:"#BBB" }}>{doneCnt}/{days.length} 완료</span>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedQuizPlanIdx(activePlanIdx);
+                      setSelectedQuizDays(weekDayNumbers);
+                      setQuizModalStep("selectDays");
+                      setQuizModal("generate");
+                    }}
+                    style={{ fontSize:10, color:ACCENT, background:"#F5F0FF", border:"none", borderRadius:6, padding:"4px 8px", cursor:"pointer", fontWeight:600 }}>
+                    🤖 퀴즈
+                  </button>
+                  <span style={{ fontSize:10, color:"#BBB" }}>{doneCnt}/{days.length} 완료</span>
+                </div>
               </div>
               {days.map(day => {
                 const subj=subjects.find(s=>s.key===day.subject), done=logs[day.day]?.done;
@@ -2891,24 +3125,70 @@ export default function App() {
                         
                         {/* Complete day button */}
                         {!done && (
+                          <div style={{ display:"flex", gap:8, marginTop:12 }}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openLog(day);
+                              }}
+                              style={{
+                                flex:2,
+                                padding:"10px",
+                                borderRadius:8,
+                                border:"none",
+                                background: allSubtasksChecked ? "#22C97A" : ACCENT,
+                                color:"white",
+                                fontSize:12,
+                                fontWeight:600,
+                                cursor:"pointer"
+                              }}>
+                              ✅ 오늘 학습 완료하기
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedQuizPlanIdx(activePlanIdx);
+                                setSelectedQuizDays([day.day]);
+                                setQuizModalStep("selectDays");
+                                setQuizModal("generate");
+                              }}
+                              style={{
+                                flex:1,
+                                padding:"10px",
+                                borderRadius:8,
+                                border:"1.5px solid #7C5CFC44",
+                                background:"#F5F0FF",
+                                color:ACCENT,
+                                fontSize:11,
+                                fontWeight:600,
+                                cursor:"pointer"
+                              }}>
+                              🤖 퀴즈
+                            </button>
+                          </div>
+                        )}
+                        {done && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              openLog(day);
+                              setSelectedQuizPlanIdx(activePlanIdx);
+                              setSelectedQuizDays([day.day]);
+                              setQuizModalStep("selectDays");
+                              setQuizModal("generate");
                             }}
                             style={{
                               width:"100%",
                               marginTop:12,
                               padding:"10px",
                               borderRadius:8,
-                              border:"none",
-                              background: allSubtasksChecked ? "#22C97A" : ACCENT,
-                              color:"white",
-                              fontSize:12,
+                              border:"1.5px solid #7C5CFC44",
+                              background:"#F5F0FF",
+                              color:ACCENT,
+                              fontSize:11,
                               fontWeight:600,
                               cursor:"pointer"
                             }}>
-                            ✅ 오늘 학습 완료하기
+                            🤖 이 범위에서 퀴즈 생성
                           </button>
                         )}
                       </div>
@@ -2968,9 +3248,16 @@ export default function App() {
           <div>
             <div style={{ background:"white", borderRadius:12, padding:"16px", marginBottom:12, border:"1.5px solid #E8ECF2" }}>
               <div style={{ fontSize:13, fontWeight:700, color:"#1A1A2E", marginBottom:12 }}>플랜 정보</div>
-              <div style={{ fontSize:12, color:"#666", lineHeight:2 }}>
+              <div style={{ fontSize:12, color:"#666", lineHeight:2.2 }}>
                 <div>📋 {plan.title}</div>
-                <div>📅 시험일: {fmt(plan.examDate)}</div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <span>📅 시험일: {fmt(plan.examDate)}</span>
+                  <button 
+                    onClick={() => { setEditDateModal({ planIdx: activePlanIdx, currentDate: plan.examDate }); setNewExamDate(plan.examDate); }}
+                    style={{ fontSize:11, color:"#7C5CFC", background:"#EEF2FF", border:"none", borderRadius:6, padding:"4px 10px", cursor:"pointer", fontWeight:600 }}>
+                    ✏️ 변경
+                  </button>
+                </div>
                 <div>📆 생성일: {fmt(plan.createdAt)}</div>
                 <div>📊 총 {schedule.length}일 스케줄</div>
               </div>
@@ -3024,6 +3311,52 @@ export default function App() {
               <button onClick={()=>setDeleteConfirmPlan(null)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"1.5px solid #E0E0E0", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13 }}>취소</button>
               <button onClick={()=>deletePlan(deleteConfirmPlan)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"none", background:"#E05555", color:"white", fontWeight:700, cursor:"pointer", fontSize:13 }}>삭제</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Date Modal */}
+      {editDateModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:"0 24px" }} onClick={()=>!updatingDate && setEditDateModal(null)}>
+          <div style={{ background:"white", borderRadius:20, padding:"28px 24px", width:"100%", maxWidth:380, textAlign:"center" }} onClick={e=>e.stopPropagation()}>
+            {updatingDate ? (
+              <>
+                <div style={{ width:48, height:48, border:`3px solid ${ACCENT}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 20px" }} />
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                <div style={{ fontSize:15, fontWeight:700, color:"#1A1A2E", marginBottom:8 }}>스케줄 재생성 중...</div>
+                <div style={{ fontSize:12, color:"#888", lineHeight:1.6 }}>AI가 새 날짜에 맞춰<br/>학습 스케줄을 다시 만들고 있어요</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize:36, marginBottom:12 }}>📅</div>
+                <div style={{ fontSize:16, fontWeight:800, color:"#1A1A2E", marginBottom:6 }}>시험일 변경</div>
+                <div style={{ fontSize:12, color:"#888", marginBottom:20, lineHeight:1.6 }}>
+                  새 날짜에 맞춰 AI가 스케줄을 재생성해요.<br/>
+                  <span style={{ color:"#E05555" }}>⚠️ 기존 학습 기록은 초기화됩니다.</span>
+                </div>
+                
+                <div style={{ marginBottom:20 }}>
+                  <div style={{ fontSize:11, color:"#888", marginBottom:6, textAlign:"left" }}>현재 시험일: {fmt(editDateModal.currentDate)}</div>
+                  <input 
+                    type="date" 
+                    value={newExamDate} 
+                    onChange={e => setNewExamDate(e.target.value)}
+                    min={new Date(Date.now() + 86400000).toISOString().slice(0,10)}
+                    style={{ width:"100%", padding:"12px 14px", borderRadius:10, border:"1.5px solid #E0E0E0", fontSize:14, outline:"none", boxSizing:"border-box", colorScheme:"light" }} 
+                  />
+                </div>
+                
+                <div style={{ display:"flex", gap:10 }}>
+                  <button onClick={()=>setEditDateModal(null)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"1.5px solid #E0E0E0", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13 }}>취소</button>
+                  <button 
+                    onClick={updateExamDate} 
+                    disabled={!newExamDate || newExamDate === editDateModal.currentDate}
+                    style={{ flex:1, padding:"13px 0", borderRadius:12, border:"none", background: (newExamDate && newExamDate !== editDateModal.currentDate) ? ACCENT : "#DDD", color:"white", fontWeight:700, cursor: (newExamDate && newExamDate !== editDateModal.currentDate) ? "pointer" : "not-allowed", fontSize:13 }}>
+                    변경하기
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

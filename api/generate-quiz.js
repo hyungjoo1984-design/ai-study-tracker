@@ -14,17 +14,22 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { planTitle, materials, existingQuestions } = req.body;
+  const { planTitle, materials, existingQuestions, selectedTopics } = req.body;
 
   // 참고자료가 있는 경우와 없는 경우 다른 프롬프트 사용
   const hasMaterials = materials && materials !== "등록된 자료 없음" && materials.trim().length > 0;
+  const hasTopics = selectedTopics && selectedTopics.trim().length > 0;
+
+  const topicsSection = hasTopics 
+    ? `\n📚 출제 범위 (이 목차에서만 문제를 출제하세요):\n${selectedTopics}\n`
+    : "";
 
   const prompt = hasMaterials 
     ? `당신은 한국의 시험 출제 전문가입니다.
 아래 참고자료를 바탕으로 5지선다 객관식 퀴즈 10개를 JSON으로 생성해주세요.
 
 시험/분야: ${planTitle || "일반 학습"}
-
+${topicsSection}
 참고 자료:
 ${materials}
 
@@ -51,18 +56,18 @@ ${existingQuestions}` : ""}
 - source는 문제의 출처 (참고자료명)
 - 실제 시험에 나올 법한 실용적인 문제 출제
 - 기존 문제와 중복되지 않는 새로운 문제 출제
-- 난이도를 다양하게 섞어서 출제`
+- 난이도를 다양하게 섞어서 출제${hasTopics ? "\n- 반드시 지정된 출제 범위 내에서만 문제를 출제하세요" : ""}`
 
     : `당신은 한국의 시험 출제 전문가입니다.
 "${planTitle || "일반 학습"}" 분야의 최신 시험 경향과 핵심 개념을 바탕으로 5지선다 객관식 퀴즈 10개를 JSON으로 생성해주세요.
-
+${topicsSection}
 ${existingQuestions ? `기존에 출제된 문제 (중복 피하기):
 ${existingQuestions}` : ""}
 
 다음 사항을 고려해주세요:
 - 한국에서 실제로 시행되는 관련 자격증/시험의 기출 유형 참고
 - 최신 트렌드와 실무에서 중요한 개념 포함
-- 초급부터 중급 난이도까지 다양하게 출제
+- 초급부터 중급 난이도까지 다양하게 출제${hasTopics ? "\n- 반드시 지정된 출제 범위 내에서만 문제를 출제하세요" : ""}
 
 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 {
