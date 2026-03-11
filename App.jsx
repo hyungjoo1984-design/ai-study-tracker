@@ -194,6 +194,8 @@ export default function App() {
   const [quizModalStep,  setQuizModalStep] = useState("selectPlan"); // "selectPlan" | "selectDays"
   const [selectedQuizPlanIdx, setSelectedQuizPlanIdx] = useState(null);
   const [selectedQuizDays, setSelectedQuizDays] = useState([]); // array of day numbers
+  const [editCreatedDateModal, setEditCreatedDateModal] = useState(null); // { planIdx, currentDate }
+  const [newCreatedDate, setNewCreatedDate] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -378,6 +380,70 @@ export default function App() {
       alert("시험일이 변경되고 스케줄이 재생성되었어요!");
     } catch (e) {
       console.error("Date update failed:", e);
+      alert("날짜 변경 중 오류가 발생했어요. 다시 시도해주세요.");
+    } finally {
+      setUpdatingDate(false);
+    }
+  };
+
+  const updateCreatedDate = async () => {
+    if (!editCreatedDateModal || !newCreatedDate) return;
+    
+    const plan = allPlans[editCreatedDateModal.planIdx];
+    if (!plan) return;
+    
+    // 생성일이 시험일 이후면 안됨
+    if (newCreatedDate >= plan.examDate) {
+      alert("생성일은 시험일보다 이전이어야 해요.");
+      return;
+    }
+    
+    setUpdatingDate(true);
+    try {
+      // AI로 새 스케줄 생성 (생성일~시험일 기간에 맞춰)
+      const res = await fetch("/api/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          field: plan.title,
+          examDate: plan.examDate,
+          dailyHours: "1",
+          background: "",
+          notes: `학습 시작일: ${newCreatedDate}`,
+          includeSubtasks: plan.schedule?.[0]?.subtasks?.length > 0,
+          startDate: newCreatedDate
+        })
+      });
+      
+      if (!res.ok) throw new Error("스케줄 재생성 실패");
+      
+      const newPlan = await res.json();
+      
+      const u = await loadUsers();
+      if (!u[nickname]?.plans?.[editCreatedDateModal.planIdx]) return;
+      
+      // 기존 플랜 업데이트 (제목/시험일 유지, 생성일/스케줄 변경, 기록 초기화)
+      u[nickname].plans[editCreatedDateModal.planIdx] = {
+        ...u[nickname].plans[editCreatedDateModal.planIdx],
+        createdAt: newCreatedDate,
+        subjects: newPlan.subjects,
+        schedule: newPlan.schedule,
+        logs: {} // 학습 기록 초기화
+      };
+      
+      await saveUsers(u);
+      setUsers({ ...u });
+      
+      // 현재 보고 있는 플랜이면 logs도 초기화
+      if (activePlanIdx === editCreatedDateModal.planIdx) {
+        setLogs({});
+      }
+      
+      setEditCreatedDateModal(null);
+      setNewCreatedDate("");
+      alert("생성일이 변경되고 스케줄이 재생성되었어요!");
+    } catch (e) {
+      console.error("Created date update failed:", e);
       alert("날짜 변경 중 오류가 발생했어요. 다시 시도해주세요.");
     } finally {
       setUpdatingDate(false);
@@ -3258,7 +3324,14 @@ export default function App() {
                     ✏️ 변경
                   </button>
                 </div>
-                <div>📆 생성일: {fmt(plan.createdAt)}</div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <span>📆 생성일: {fmt(plan.createdAt)}</span>
+                  <button 
+                    onClick={() => { setEditCreatedDateModal({ planIdx: activePlanIdx, currentDate: plan.createdAt }); setNewCreatedDate(plan.createdAt); }}
+                    style={{ fontSize:11, color:"#7C5CFC", background:"#EEF2FF", border:"none", borderRadius:6, padding:"4px 10px", cursor:"pointer", fontWeight:600 }}>
+                    ✏️ 변경
+                  </button>
+                </div>
                 <div>📊 총 {schedule.length}일 스케줄</div>
               </div>
             </div>
@@ -3352,6 +3425,52 @@ export default function App() {
                     onClick={updateExamDate} 
                     disabled={!newExamDate || newExamDate === editDateModal.currentDate}
                     style={{ flex:1, padding:"13px 0", borderRadius:12, border:"none", background: (newExamDate && newExamDate !== editDateModal.currentDate) ? ACCENT : "#DDD", color:"white", fontWeight:700, cursor: (newExamDate && newExamDate !== editDateModal.currentDate) ? "pointer" : "not-allowed", fontSize:13 }}>
+                    변경하기
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Created Date Modal */}
+      {editCreatedDateModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:"0 24px" }} onClick={()=>!updatingDate && setEditCreatedDateModal(null)}>
+          <div style={{ background:"white", borderRadius:20, padding:"28px 24px", width:"100%", maxWidth:380, textAlign:"center" }} onClick={e=>e.stopPropagation()}>
+            {updatingDate ? (
+              <>
+                <div style={{ width:48, height:48, border:`3px solid ${ACCENT}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 20px" }} />
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                <div style={{ fontSize:15, fontWeight:700, color:"#1A1A2E", marginBottom:8 }}>스케줄 재생성 중...</div>
+                <div style={{ fontSize:12, color:"#888", lineHeight:1.6 }}>AI가 새 기간에 맞춰<br/>학습 스케줄을 다시 만들고 있어요</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize:36, marginBottom:12 }}>📆</div>
+                <div style={{ fontSize:16, fontWeight:800, color:"#1A1A2E", marginBottom:6 }}>생성일(시작일) 변경</div>
+                <div style={{ fontSize:12, color:"#888", marginBottom:20, lineHeight:1.6 }}>
+                  새 기간에 맞춰 AI가 스케줄을 재생성해요.<br/>
+                  <span style={{ color:"#E05555" }}>⚠️ 기존 학습 기록은 초기화됩니다.</span>
+                </div>
+                
+                <div style={{ marginBottom:20 }}>
+                  <div style={{ fontSize:11, color:"#888", marginBottom:6, textAlign:"left" }}>현재 생성일: {fmt(editCreatedDateModal.currentDate)}</div>
+                  <input 
+                    type="date" 
+                    value={newCreatedDate} 
+                    onChange={e => setNewCreatedDate(e.target.value)}
+                    max={allPlans[editCreatedDateModal.planIdx]?.examDate ? new Date(new Date(allPlans[editCreatedDateModal.planIdx].examDate).getTime() - 86400000).toISOString().slice(0,10) : undefined}
+                    style={{ width:"100%", padding:"12px 14px", borderRadius:10, border:"1.5px solid #E0E0E0", fontSize:14, outline:"none", boxSizing:"border-box", colorScheme:"light" }} 
+                  />
+                </div>
+                
+                <div style={{ display:"flex", gap:10 }}>
+                  <button onClick={()=>setEditCreatedDateModal(null)} style={{ flex:1, padding:"13px 0", borderRadius:12, border:"1.5px solid #E0E0E0", background:"none", color:"#888", fontWeight:600, cursor:"pointer", fontSize:13 }}>취소</button>
+                  <button 
+                    onClick={updateCreatedDate} 
+                    disabled={!newCreatedDate || newCreatedDate === editCreatedDateModal.currentDate}
+                    style={{ flex:1, padding:"13px 0", borderRadius:12, border:"none", background: (newCreatedDate && newCreatedDate !== editCreatedDateModal.currentDate) ? ACCENT : "#DDD", color:"white", fontWeight:700, cursor: (newCreatedDate && newCreatedDate !== editCreatedDateModal.currentDate) ? "pointer" : "not-allowed", fontSize:13 }}>
                     변경하기
                   </button>
                 </div>

@@ -14,7 +14,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { field, examDate, dailyHours, background, notes, includeSubtasks, today } = req.body;
+  const { field, examDate, dailyHours, background, notes, includeSubtasks, today, startDate } = req.body;
+
+  // startDate가 있으면 사용, 없으면 today 사용
+  const scheduleStartDate = startDate || today;
 
   // 기본 프롬프트 (세부 목차 없음 - 빠름)
   const basicPrompt = `당신은 한국의 시험 준비 전문 스터디 플래너입니다.
@@ -25,7 +28,7 @@ export default async function handler(req, res) {
 하루 학습 시간: ${dailyHours}시간
 기존 배경지식: ${background || "없음"}
 추가 메모: ${notes || "없음"}
-오늘 날짜: ${today}
+학습 시작일: ${scheduleStartDate}
 
 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 {
@@ -39,7 +42,7 @@ export default async function handler(req, res) {
 }
 
 규칙:
-- schedule의 date는 오늘(${today})부터 시험일(${examDate}) 하루 전까지 빠짐없이 채우세요
+- schedule의 date는 학습 시작일(${scheduleStartDate})부터 시험일(${examDate}) 하루 전까지 빠짐없이 채우세요
 - 각 날짜마다 하나의 항목만 생성하세요
 - topic은 한국어로 구체적으로 작성하세요
 - subject는 반드시 subjects 배열의 key 중 하나여야 합니다
@@ -54,7 +57,7 @@ export default async function handler(req, res) {
 하루 학습 시간: ${dailyHours}시간
 기존 배경지식: ${background || "없음"}
 추가 메모: ${notes || "없음"}
-오늘 날짜: ${today}
+학습 시작일: ${scheduleStartDate}
 
 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 {
@@ -78,7 +81,7 @@ export default async function handler(req, res) {
 }
 
 규칙:
-- schedule의 date는 오늘(${today})부터 시험일(${examDate}) 하루 전까지 빠짐없이 채우세요
+- schedule의 date는 학습 시작일(${scheduleStartDate})부터 시험일(${examDate}) 하루 전까지 빠짐없이 채우세요
 - 각 날짜마다 하나의 항목만 생성하세요
 - topic은 한국어로 구체적으로 작성하세요
 - subject는 반드시 subjects 배열의 key 중 하나여야 합니다
